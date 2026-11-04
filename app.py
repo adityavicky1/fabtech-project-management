@@ -123,12 +123,11 @@ def calculate_automatic_status(df):
         "nat",
         "",
         "NaT",
-        "nat",
     ]:
       return "DISP"
-    elif rfd and rfd.lower() not in ["nan", "none", "nat", "", "NaT", "nat"]:
+    elif rfd and rfd.lower() not in ["nan", "none", "nat", "", "NaT"]:
       return "RFD"
-    elif wip and wip.lower() not in ["nan", "none", "nat", "", "NaT", "nat"]:
+    elif wip and wip.lower() not in ["nan", "none", "nat", "", "NaT"]:
       return "WIP"
     else:
       return "YTS"
@@ -191,12 +190,39 @@ with tab1:
     except Exception as e:
       st.error(f"Error processing order file: {e}")
 
+  # Format end_delivery_date as dates for calendar picker in order backlog
+  if "end_delivery_date" in df_orders.columns:
+    df_orders["end_delivery_date"] = pd.to_datetime(
+        df_orders["end_delivery_date"].replace(
+            ["", "None", "none", "NaN", "nan", "NaT", "nat"], pd.NaT
+        ),
+        errors="coerce",
+    ).dt.date
+
+  order_column_configs = {}
+  if "end_delivery_date" in df_orders.columns:
+    order_column_configs["end_delivery_date"] = st.column_config.DateColumn(
+        label="End Delivery Date", format="YYYY-MM-DD"
+    )
+
   edited_orders = st.data_editor(
-      df_orders, num_rows="dynamic", key="orders_editor"
+      df_orders,
+      num_rows="dynamic",
+      key="orders_editor",
+      column_config=order_column_configs,
   )
   if st.button("💾 Save Order Backlog to Server"):
+    # Convert dates back to string format before saving
+    if "end_delivery_date" in edited_orders.columns:
+      edited_orders["end_delivery_date"] = pd.to_datetime(
+          edited_orders["end_delivery_date"], errors="coerce"
+      ).dt.strftime("%Y-%m-%d")
+      edited_orders["end_delivery_date"] = edited_orders[
+          "end_delivery_date"
+      ].fillna("")
     save_orders_to_db(edited_orders)
     st.success("Order backlog successfully saved to server database!")
+    st.rerun()
 
 # --- TAB 2: PROJECT MASTER SHEET ---
 with tab2:
@@ -396,16 +422,16 @@ with tab5:
   st.subheader("Overall Project Status Summary Pivot")
   st.markdown(
       "Automatic pivot table summarizing total weight (`DRAW TOTAL WT`) by"
-      " Project Number and Status (`RFD`, `WIP`, `DISP`, `YTS`), with Grand"
-      " Totals."
+      " Project Number, VLOOKUP Project Name (Customer Name) from Order Backlog,"
+      " and Status (`RFD`, `WIP`, `DISP`, `YTS`), with Grand Totals."
   )
 
 
-  def calculate_overall_status_pivot(df, weight_col="draw_total_wt"):
-    if df.empty or "status" not in df.columns:
-      return pd.DataFrame(columns=["ProjectNo", "Grand Total"])
+  def calculate_overall_status_pivot(df_m, df_o, weight_col="draw_total_wt"):
+    if df_m.empty or "status" not in df_m.columns:
+      return pd.DataFrame(columns=["ProjectNo", "Project Name", "Grand Total"])
 
-    work_df = df.copy()
+    work_df = df_m.copy()
     if weight_col not in work_df.columns:
       weight_col = work_df.columns[11]
 
@@ -431,6 +457,41 @@ with tab5:
     status_cols = [c for c in pivot.columns if c != "ProjectNo"]
     pivot["Grand Total"] = pivot[status_cols].sum(axis=1)
 
+    # VLOOKUP Project Name / Customer Name from Order Backlog
+    if not df_o.empty:
+      # Identify job number and customer columns dynamically or by standard names
+      job_col = (
+          "job_number"
+          if "job_number" in df_o.columns
+          else (df_o.columns[1] if len(df_o.columns) > 1 else None)
+      )
+      cust_col = (
+          "customer_name"
+          if "customer_name" in df_o.columns
+          else (df_o.columns[2] if len(df_o.columns) > 2 else None)
+      )
+
+      if job_col and cust_col:
+        # Create a mapping dictionary for vlookup
+        mapping_dict = (
+            df_o.drop_duplicates(subset=[job_col])
+            .set_index(job_col)[cust_col]
+            .to_dict()
+        )
+        pivot["Project Name"] = (
+            pivot["ProjectNo"].astype(str).map(mapping_dict).fillna("N/A")
+        )
+      else:
+        pivot["Project Name"] = "N/A"
+    else:
+      pivot["Project Name"] = "N/A"
+
+    # Reorder columns to place Project Name right after ProjectNo
+    cols = ["ProjectNo", "Project Name"] + [
+        c for c in pivot.columns if c not in ["ProjectNo", "Project Name"]
+    ]
+    pivot = pivot[cols]
+
     if not pivot.empty:
       numeric_cols = pivot.select_dtypes(include=["number"]).columns
       total_row = {
@@ -438,12 +499,13 @@ with tab5:
           for col in pivot.columns
       }
       total_row["ProjectNo"] = "Grand Total"
+      total_row["Project Name"] = ""
       pivot = pd.concat([pivot, pd.DataFrame([total_row])], ignore_index=True)
 
     return pivot
 
 
-  overall_pivot = calculate_overall_status_pivot(df_master)
+  overall_pivot = calculate_overall_status_pivot(df_master, df_orders)
   if overall_pivot.empty:
     st.info("No data available for overall status pivot.")
   else:
