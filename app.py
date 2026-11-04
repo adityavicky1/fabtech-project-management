@@ -397,17 +397,16 @@ def calculate_weight_ageing_report(
   pivot["Total Weight"] = pivot[bucket_cols].sum(axis=1)
   final_df = pivot[["ProjectNo"] + bucket_cols + ["Total Weight"]]
 
-  # Round all numeric weight columns to 3 decimal places
   numeric_cols = final_df.select_dtypes(include=["number"]).columns
   final_df[numeric_cols] = final_df[numeric_cols].round(3)
 
   if not final_df.empty:
     total_row = {
-        col: final_df[col].sum() if col in numeric_cols else ""
+        col: round(final_df[col].sum(), 3)
+        if col in numeric_cols
+        else ("TOTAL" if col == "ProjectNo" else "")
         for col in final_df.columns
     }
-    total_row["ProjectNo"] = "TOTAL"
-    total_row[numeric_cols] = pd.Series(total_row[numeric_cols]).round(3)
     final_df = pd.concat([final_df, pd.DataFrame([total_row])], ignore_index=True)
 
   return final_df
@@ -499,4 +498,72 @@ with tab5:
 
     # VLOOKUP Project Name / Customer Name from Order Backlog
     if not df_o.empty:
-      job_col
+      job_col = (
+          "job_number"
+          if "job_number" in df_o.columns
+          else (df_o.columns[1] if len(df_o.columns) > 1 else None)
+      )
+      cust_col = (
+          "customer_name"
+          if "customer_name" in df_o.columns
+          else (df_o.columns[2] if len(df_o.columns) > 2 else None)
+      )
+
+      if job_col and cust_col:
+        mapping_dict = (
+            df_o.drop_duplicates(subset=[job_col])
+            .set_index(job_col)[cust_col]
+            .to_dict()
+        )
+        pivot["Project Name"] = (
+            pivot["ProjectNo"].astype(str).map(mapping_dict).fillna("N/A")
+        )
+      else:
+        pivot["Project Name"] = "N/A"
+    else:
+      pivot["Project Name"] = "N/A"
+
+    cols = ["ProjectNo", "Project Name"] + [
+        c for c in pivot.columns if c not in ["ProjectNo", "Project Name"]
+    ]
+    pivot = pivot[cols]
+
+    numeric_cols = pivot.select_dtypes(include=["number"]).columns
+    pivot[numeric_cols] = pivot[numeric_cols].round(3)
+
+    if not pivot.empty:
+      total_row = {
+          col: round(pivot[col].sum(), 3)
+          if col in numeric_cols
+          else ("Grand Total" if col == "ProjectNo" else "")
+          for col in pivot.columns
+      }
+      pivot = pd.concat([pivot, pd.DataFrame([total_row])], ignore_index=True)
+
+    return pivot
+
+
+  def style_overall_pivot(df):
+    if df.empty:
+      return df
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+
+    if "Grand Total" in df.columns:
+      styles["Grand Total"] = "background-color: #e2f0d9; font-weight: bold;"
+
+    last_idx = df.index[-1]
+    if (
+        "ProjectNo" in df.columns
+        and str(df.loc[last_idx, "ProjectNo"]).strip().upper() == "GRAND TOTAL"
+    ):
+      styles.loc[last_idx, :] = "background-color: #fff2cc; font-weight: bold;"
+
+    return styles
+
+
+  overall_pivot = calculate_overall_status_pivot(df_master, df_orders)
+  if overall_pivot.empty:
+    st.info("No data available for overall status pivot.")
+  else:
+    styled_pivot = overall_pivot.style.apply(style_overall_pivot, axis=None)
+    st.dataframe(styled_pivot, use_container_width=True)
