@@ -157,15 +157,16 @@ df_master, df_orders = load_data_from_db()
 
 st.title("⚙️ FabTech Fabrication Project Management & Tracking Portal")
 st.markdown(
-    "Server-Persistent Master Data, Auto-Status Calculation, and Weight-Summed"
-    " Ageing Reports."
+    "Server-Persistent Master Data, Auto-Status Calculation, Ageing Reports,"
+    " and Overall Status Pivot."
 )
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "1. Order Backlog",
     "2. Project Master Sheet",
     "3. WIP Ageing Report (Weight Sum)",
     "4. RFD Ageing Report (Weight Sum)",
+    "5. Overall Project Status Pivot",
 ])
 
 # --- TAB 1: ORDER BACKLOG & UPLOAD ---
@@ -241,7 +242,6 @@ with tab2:
           errors="coerce",
       ).dt.date
 
-  # Configure interactive online editor with Calendar Date Pickers
   column_configurations = {}
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
     if d_col in df_master.columns:
@@ -262,7 +262,6 @@ with tab2:
   )
 
   if st.button("💾 Save Master Sheet Changes to Server"):
-    # Convert date objects back to strings for SQLite storage
     for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
       if d_col in edited_master.columns:
         edited_master[d_col] = pd.to_datetime(
@@ -359,7 +358,6 @@ def calculate_weight_ageing_report(
   pivot["Total Weight"] = pivot[bucket_cols].sum(axis=1)
   final_df = pivot[["ProjectNo"] + bucket_cols + ["Total Weight"]]
 
-  # Append TOTAL row at the bottom
   if not final_df.empty:
     numeric_cols = final_df.select_dtypes(include=["number"]).columns
     total_row = {
@@ -391,3 +389,62 @@ with tab4:
   )
   rfd_rep = calculate_weight_ageing_report(df_master, "RFD", "rfd_date")
   st.dataframe(rfd_rep, use_container_width=True)
+
+
+# --- TAB 5: OVERALL PROJECT STATUS PIVOT ---
+with tab5:
+  st.subheader("Overall Project Status Summary Pivot")
+  st.markdown(
+      "Automatic pivot table summarizing total weight (`DRAW TOTAL WT`) by"
+      " Project Number and Status (`RFD`, `WIP`, `DISP`, `YTS`), with Grand"
+      " Totals."
+  )
+
+
+  def calculate_overall_status_pivot(df, weight_col="draw_total_wt"):
+    if df.empty or "status" not in df.columns:
+      return pd.DataFrame(columns=["ProjectNo", "Grand Total"])
+
+    work_df = df.copy()
+    if weight_col not in work_df.columns:
+      weight_col = work_df.columns[11]
+
+    work_df[weight_col] = pd.to_numeric(
+        work_df[weight_col], errors="coerce"
+    ).fillna(0)
+    proj_col = (
+        "project_no" if "project_no" in work_df.columns else work_df.columns[2]
+    )
+
+    pivot = (
+        work_df.pivot_table(
+            index=proj_col,
+            columns="status",
+            values=weight_col,
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+        .rename(columns={proj_col: "ProjectNo"})
+    )
+
+    status_cols = [c for c in pivot.columns if c != "ProjectNo"]
+    pivot["Grand Total"] = pivot[status_cols].sum(axis=1)
+
+    if not pivot.empty:
+      numeric_cols = pivot.select_dtypes(include=["number"]).columns
+      total_row = {
+          col: pivot[col].sum() if col in numeric_cols else ""
+          for col in pivot.columns
+      }
+      total_row["ProjectNo"] = "Grand Total"
+      pivot = pd.concat([pivot, pd.DataFrame([total_row])], ignore_index=True)
+
+    return pivot
+
+
+  overall_pivot = calculate_overall_status_pivot(df_master)
+  if overall_pivot.empty:
+    st.info("No data available for overall status pivot.")
+  else:
+    st.dataframe(overall_pivot, use_container_width=True)
