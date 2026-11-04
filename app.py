@@ -65,7 +65,7 @@ def load_data_from_db():
   df_orders = pd.read_sql("SELECT * FROM order_backlog", conn)
   conn.close()
 
-  # Ensure Part Sl No is explicitly treated as string
+  # Ensure Part Sl No is explicitly treated as string format
   if not df_master.empty and "part_sl_no" in df_master.columns:
     df_master["part_sl_no"] = df_master["part_sl_no"].astype(str)
 
@@ -126,7 +126,7 @@ df_master, df_orders = load_data_from_db()
 st.title("⚙️ FabTech Fabrication Project Management & Tracking Portal")
 st.markdown(
     "Server-Persistent Master Data, Order Backlog Upload, and Weight-Summed"
-    " Ageing Reports."
+    " Ageing Reports with Totals."
 )
 
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -190,7 +190,6 @@ with tab2:
             uploaded_file, dtype={"Part Sl No": str, "part_sl_no": str}
         )
       else:
-        # Read all columns as string first to protect Part Sl No text formatting (e.g. '1/2')
         df_new = pd.read_excel(uploaded_file, dtype=str)
 
       df_new.columns = [
@@ -216,36 +215,27 @@ with tab2:
     )
 
 
-# --- HELPER: WEIGHT SUMMED AGEING REPORT ---
+# --- HELPER: WEIGHT SUMMED AGEING REPORT WITH TOTAL ROW ---
 def calculate_weight_ageing_report(
     df, status_val, date_col, weight_col="draw_total_wt"
 ):
+  empty_df = pd.DataFrame(
+      columns=[
+          "ProjectNo",
+          "0-7 Days",
+          "8-15 Days",
+          "16-30 Days",
+          "30-60 Days",
+          ">60 Days",
+          "Total Weight",
+      ]
+  )
   if df.empty or "status" not in df.columns:
-    return pd.DataFrame(
-        columns=[
-            "ProjectNo",
-            "0-7 Days",
-            "8-15 Days",
-            "16-30 Days",
-            "30-60 Days",
-            ">60 Days",
-            "Total Weight",
-        ]
-    )
+    return empty_df
 
   work_df = df[df["status"].astype(str).str.upper() == status_val.upper()].copy()
   if work_df.empty:
-    return pd.DataFrame(
-        columns=[
-            "ProjectNo",
-            "0-7 Days",
-            "8-15 Days",
-            "16-30 Days",
-            "30-60 Days",
-            ">60 Days",
-            "Total Weight",
-        ]
-    )
+    return empty_df
 
   today = pd.Timestamp.today().normalize()
   if date_col in work_df.columns:
@@ -303,25 +293,37 @@ def calculate_weight_ageing_report(
 
   bucket_cols = ["0-7 Days", "8-15 Days", "16-30 Days", "30-60 Days", ">60 Days"]
   pivot["Total Weight"] = pivot[bucket_cols].sum(axis=1)
-  return pivot[["ProjectNo"] + bucket_cols + ["Total Weight"]]
+  final_df = pivot[["ProjectNo"] + bucket_cols + ["Total Weight"]]
+
+  # Append TOTAL row at the bottom
+  if not final_df.empty:
+    numeric_cols = final_df.select_dtypes(include=["number"]).columns
+    total_row = {
+        col: final_df[col].sum() if col in numeric_cols else ""
+        for col in final_df.columns
+    }
+    total_row["ProjectNo"] = "TOTAL"
+    final_df = pd.concat([final_df, pd.DataFrame([total_row])], ignore_index=True)
+
+  return final_df
 
 
 # --- TAB 3: WIP AGEING REPORT ---
 with tab3:
-  st.subheader("WIP Ageing Bucket Report (Sum of Total Weight)")
+  st.subheader("WIP Ageing Bucket Report (Sum of Total Weight & Totals)")
   st.markdown(
       "Calculated based on **Today's Date - WIP Date** for items with status"
-      " **WIP**, summing up `DRAW TOTAL WT`."
+      " **WIP**, summing up `DRAW TOTAL WT` with summary totals at the bottom."
   )
   wip_rep = calculate_weight_ageing_report(df_master, "WIP", "wip_date")
   st.dataframe(wip_rep, use_container_width=True)
 
 # --- TAB 4: RFD AGEING REPORT ---
 with tab4:
-  st.subheader("RFD Ageing Bucket Report (Sum of Total Weight)")
+  st.subheader("RFD Ageing Bucket Report (Sum of Total Weight & Totals)")
   st.markdown(
       "Calculated based on **Today's Date - RFD Date** for items with status"
-      " **RFD**, summing up `DRAW TOTAL WT`."
+      " **RFD**, summing up `DRAW TOTAL WT` with summary totals at the bottom."
   )
   rfd_rep = calculate_weight_ageing_report(df_master, "RFD", "rfd_date")
   st.dataframe(rfd_rep, use_container_width=True)
