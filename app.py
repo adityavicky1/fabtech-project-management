@@ -133,6 +133,34 @@ with tab2:
       " dates."
   )
 
+  # 1. Download Master Template Button
+  import io
+
+  buffer = io.BytesIO()
+  with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+    st.session_state.master_sheet.to_excel(
+        writer, index=False, sheet_name="Sample Master Sheet"
+    )
+  st.download_button(
+      label="📥 Download Project Master Template",
+      data=buffer.getvalue(),
+      file_name="Project_Master_Template.xlsx",
+      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  )
+
+  # 2. Upload Master Data
+  uploaded_master = st.file_uploader(
+      "Upload Master Excel (Project Master)",
+      type=["xlsx", "csv"],
+      key="master_up",
+  )
+  if uploaded_master is not None:
+    if uploaded_master.name.endswith(".csv"):
+      st.session_state.master_sheet = pd.read_csv(uploaded_master)
+    else:
+      st.session_state.master_sheet = pd.read_excel(uploaded_master)
+    st.success("Project master sheet updated successfully from file!")
+
   # Filter by project
   proj_list = st.session_state.master_sheet["Project No"].unique()
   selected_proj = st.selectbox(
@@ -146,12 +174,8 @@ with tab2:
   edited_master = st.data_editor(
       display_df, num_rows="dynamic", key="master_editor"
   )
-  # Update back session state
   if selected_proj == "All":
     st.session_state.master_sheet = edited_master
-  else:
-    st.session_state.master_sheet.update(edited_master)
-
 # --- HELPER FUNCTION FOR AGEING BUCKETS ---
 def calculate_ageing_report(df, status_filter, date_col):
   if df.empty:
