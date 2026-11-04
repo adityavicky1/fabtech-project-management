@@ -133,7 +133,7 @@ with tab2:
       " dates."
   )
 
-  # 1. Download Master Template Button
+  # Download Master Template Button
   import io
 
   buffer = io.BytesIO()
@@ -148,35 +148,74 @@ with tab2:
       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   )
 
-  # 2. Upload Master Data
+  # Upload Master Data with automatic cleaning
   uploaded_master = st.file_uploader(
       "Upload Master Excel (Project Master)",
       type=["xlsx", "csv"],
       key="master_up",
   )
+
   if uploaded_master is not None:
-    if uploaded_master.name.endswith(".csv"):
-      st.session_state.master_sheet = pd.read_csv(uploaded_master)
-    else:
-      st.session_state.master_sheet = pd.read_excel(uploaded_master)
-    st.success("Project master sheet updated successfully from file!")
+    try:
+      if uploaded_master.name.endswith(".csv"):
+        df_uploaded = pd.read_csv(uploaded_master)
+      else:
+        df_uploaded = pd.read_excel(uploaded_master)
+
+      # 1. Clean column names (strip whitespace and standardise casing if needed)
+      df_uploaded.columns = df_uploaded.columns.str.strip()
+
+      # 2. Ensure standard column names exist
+      if "STATUS" not in df_uploaded.columns and "Status" in df_uploaded.columns:
+        df_uploaded.rename(columns={"Status": "STATUS"}, inplace=True)
+      if (
+          "Project No" not in df_uploaded.columns
+          and "ProjectNo" in df_uploaded.columns
+      ):
+        df_uploaded.rename(columns={"ProjectNo": "Project No"}, inplace=True)
+
+      # 3. Convert date columns properly
+      for d_col in ["WIP Date", "RFD Date"]:
+        if d_col in df_uploaded.columns:
+          df_uploaded[d_col] = pd.to_datetime(
+              df_uploaded[d_col], errors="coerce"
+          ).dt.strftime("%Y-%m-%d")
+
+      st.session_state.master_sheet = df_uploaded
+      st.success(
+          "Project master sheet uploaded and cleaned successfully! Ageing"
+          " reports updated."
+      )
+      st.rerun()  # Force instant refresh of all tabs
+
+    except Exception as e:
+      st.error(f"Error processing uploaded file: {e}")
 
   # Filter by project
-  proj_list = st.session_state.master_sheet["Project No"].unique()
-  selected_proj = st.selectbox(
-      "Select Project Number to Filter", options=["All"] + list(proj_list)
-  )
+  if "Project No" in st.session_state.master_sheet.columns:
+    proj_list = st.session_state.master_sheet["Project No"].dropna().unique()
+    selected_proj = st.selectbox(
+        "Select Project Number to Filter", options=["All"] + list(proj_list)
+    )
 
-  display_df = st.session_state.master_sheet
-  if selected_proj != "All":
-    display_df = display_df[display_df["Project No"] == selected_proj]
+    display_df = st.session_state.master_sheet
+    if selected_proj != "All":
+      display_df = display_df[display_df["Project No"] == selected_proj]
 
-  edited_master = st.data_editor(
-      display_df, num_rows="dynamic", key="master_editor"
-  )
-  if selected_proj == "All":
-    st.session_state.master_sheet = edited_master
-# --- HELPER FUNCTION FOR AGEING BUCKETS ---
+    edited_master = st.data_editor(
+        display_df, num_rows="dynamic", key="master_editor"
+    )
+
+    if selected_proj == "All":
+      st.session_state.master_sheet = edited_master
+    else:
+      # Update the matching rows in the main session state dataframe
+      st.session_state.master_sheet.update(edited_master)
+  else:
+    st.warning(
+        "The uploaded sheet is missing the 'Project No' column. Please check"
+        " your template."
+    )# --- HELPER FUNCTION FOR AGEING BUCKETS ---
 def calculate_ageing_report(df, status_filter, date_col):
   if df.empty:
     return pd.DataFrame()
