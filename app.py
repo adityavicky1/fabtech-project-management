@@ -232,12 +232,12 @@ with tab1:
     st.success("Order backlog successfully saved to server database!")
     st.rerun()
 
-# --- TAB 2: PROJECT MASTER SHEET WITH FULLY DYNAMIC MULTI-COLUMN FILTERS ---
+# --- TAB 2: PROJECT MASTER SHEET ---
 with tab2:
-  st.subheader("Project Master Sheet (Dynamic Filters & Calendar Date Pickers)")
+  st.subheader("Project Master Sheet (Auto-Status & Calendar Date Pickers)")
   st.markdown(
-      "Upload master template or dynamically filter and edit online. Status"
-      " is calculated automatically based on dates."
+      "Upload master template or edit online. Status is calculated"
+      " automatically based on dates."
   )
 
   uploaded_file = st.file_uploader(
@@ -266,59 +266,10 @@ with tab2:
       st.error(f"Error processing uploaded file: {e}")
 
   df_master = calculate_automatic_status(df_master)
-
-  # --- DYNAMIC MULTI-COLUMN FILTER EXPANDER ---
-  with st.expander(
-      "🔍 Advanced Dynamic Column Filters (Filter any column)", expanded=True
-  ):
-    all_columns = list(df_master.columns)
-    filter_column = st.selectbox(
-        "Select Column to Filter By",
-        options=["None"] + all_columns,
-        key="dynamic_filter_col",
-    )
-
-    filtered_master = df_master.copy()
-
-    if filter_column != "None":
-      unique_vals = sorted(
-          df_master[filter_column].dropna().astype(str).unique().tolist()
-      )
-      selected_vals = st.multiselect(
-          f"Select value(s) for '{filter_column}'", options=unique_vals
-      )
-
-      if selected_vals:
-        filtered_master = filtered_master[
-            filtered_master[filter_column].astype(str).isin(selected_vals)
-        ]
-
-      filter_column_2 = st.selectbox(
-          "Select Second Column to Filter By (Optional)",
-          options=["None"] + all_columns,
-          key="dynamic_filter_col_2",
-      )
-      if filter_column_2 != "None":
-        unique_vals_2 = sorted(
-            filtered_master[filter_column_2]
-            .dropna()
-            .astype(str)
-            .unique()
-            .tolist()
-        )
-        selected_vals_2 = st.multiselect(
-            f"Select value(s) for '{filter_column_2}'", options=unique_vals_2
-        )
-        if selected_vals_2:
-          filtered_master = filtered_master[
-              filtered_master[filter_column_2].astype(str).isin(selected_vals_2)
-          ]
-
-  # Clean up date columns for st.data_editor
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
-    if d_col in filtered_master.columns:
-      filtered_master[d_col] = pd.to_datetime(
-          filtered_master[d_col].replace(
+    if d_col in df_master.columns:
+      df_master[d_col] = pd.to_datetime(
+          df_master[d_col].replace(
               ["", "None", "none", "NaN", "nan", "NaT", "nat"], pd.NaT
           ),
           errors="coerce",
@@ -326,49 +277,39 @@ with tab2:
 
   column_configurations = {}
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
-    if d_col in filtered_master.columns:
+    if d_col in df_master.columns:
       column_configurations[d_col] = st.column_config.DateColumn(
           label=d_col.replace("_", " ").title(), format="YYYY-MM-DD"
       )
 
-  if "status" in filtered_master.columns:
+  if "status" in df_master.columns:
     column_configurations["status"] = st.column_config.TextColumn(
         label="Status (Auto)", disabled=True
     )
 
-  edited_filtered_master = st.data_editor(
-      filtered_master,
+  edited_master = st.data_editor(
+      df_master,
       num_rows="dynamic",
       key="master_editor",
       column_config=column_configurations,
   )
 
   if st.button("💾 Save Master Sheet Changes to Server"):
-    full_df = df_master.copy()
-
-    # Safely update existing edited rows using pandas update() and append new rows
-    existing_indices = edited_filtered_master.index.intersection(full_df.index)
-    new_rows = edited_filtered_master.drop(existing_indices, errors="ignore")
-
-    full_df.update(edited_filtered_master.loc[existing_indices])
-    if not new_rows.empty:
-      full_df = pd.concat([full_df, new_rows], ignore_index=True)
-
     for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
-      if d_col in full_df.columns:
-        full_df[d_col] = pd.to_datetime(
-            full_df[d_col], errors="coerce"
+      if d_col in edited_master.columns:
+        edited_master[d_col] = pd.to_datetime(
+            edited_master[d_col], errors="coerce"
         ).dt.strftime("%Y-%m-%d")
-        full_df[d_col] = full_df[d_col].fillna("")
+        edited_master[d_col] = edited_master[d_col].fillna("")
 
     for w_col in ["actual_wt", "draw_total_wt"]:
-      if w_col in full_df.columns:
-        full_df[w_col] = pd.to_numeric(
-            full_df[w_col], errors="coerce"
+      if w_col in edited_master.columns:
+        edited_master[w_col] = pd.to_numeric(
+            edited_master[w_col], errors="coerce"
         ).round(3)
 
-    full_df = calculate_automatic_status(full_df)
-    save_master_to_db(full_df)
+    edited_master = calculate_automatic_status(edited_master)
+    save_master_to_db(edited_master)
     st.success(
         "Project master sheet successfully updated, auto-status calculated, and"
         " saved to server!"
