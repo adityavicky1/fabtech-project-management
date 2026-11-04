@@ -346,16 +346,13 @@ with tab2:
   if st.button("💾 Save Master Sheet Changes to Server"):
     full_df = df_master.copy()
 
-    # Safely update edited rows or append newly created rows
-    for idx, row in edited_filtered_master.iterrows():
-      if idx in full_df.index:
-        for col in full_df.columns:
-          if col in row:
-            full_df.at[idx, col] = row[col]
-      else:
-        full_df = pd.concat(
-            [full_df, pd.DataFrame([row])], ignore_index=True
-        )
+    # Safely update existing edited rows using pandas update() and append new rows
+    existing_indices = edited_filtered_master.index.intersection(full_df.index)
+    new_rows = edited_filtered_master.drop(existing_indices, errors="ignore")
+
+    full_df.update(edited_filtered_master.loc[existing_indices])
+    if not new_rows.empty:
+      full_df = pd.concat([full_df, new_rows], ignore_index=True)
 
     for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
       if d_col in full_df.columns:
