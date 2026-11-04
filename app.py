@@ -232,11 +232,11 @@ with tab1:
     st.success("Order backlog successfully saved to server database!")
     st.rerun()
 
-# --- TAB 2: PROJECT MASTER SHEET ---
+# --- TAB 2: PROJECT MASTER SHEET WITH FILTERS ---
 with tab2:
-  st.subheader("Project Master Sheet (Auto-Status & Calendar Date Pickers)")
+  st.subheader("Project Master Sheet (Filters & Calendar Date Pickers)")
   st.markdown(
-      "Upload master template or edit online. Status is calculated"
+      "Upload master template or filter and edit online. Status is calculated"
       " automatically based on dates."
   )
 
@@ -266,10 +266,56 @@ with tab2:
       st.error(f"Error processing uploaded file: {e}")
 
   df_master = calculate_automatic_status(df_master)
+
+  # --- FILTER SECTION ---
+  with st.expander("🔍 Filter Project Master Sheet", expanded=True):
+    col_f1, col_f2, col_f3 = st.columns(3)
+    with col_f1:
+      available_projects = (
+          ["All"] + sorted(df_master["project_no"].dropna().unique().tolist())
+          if "project_no" in df_master.columns
+          else ["All"]
+      )
+      selected_project = st.selectbox(
+          "Filter by Project No", available_projects
+      )
+    with col_f2:
+      available_statuses = (
+          ["All"] + sorted(df_master["status"].dropna().unique().tolist())
+          if "status" in df_master.columns
+          else ["All"]
+      )
+      selected_status = st.selectbox("Filter by Status", available_statuses)
+    with col_f3:
+      available_contractors = (
+          ["All"] + sorted(df_master["contractor"].dropna().unique().tolist())
+          if "contractor" in df_master.columns
+          else ["All"]
+      )
+      selected_contractor = st.selectbox(
+          "Filter by Contractor", available_contractors
+      )
+
+  # Apply filters to working view
+  filtered_master = df_master.copy()
+  if selected_project != "All":
+    filtered_master = filtered_master[
+        filtered_master["project_no"] == selected_project
+    ]
+  if selected_status != "All":
+    filtered_master = filtered_master[
+        filtered_master["status"] == selected_status
+    ]
+  if selected_contractor != "All":
+    filtered_master = filtered_master[
+        filtered_master["contractor"] == selected_contractor
+    ]
+
+  # Clean up date columns for st.data_editor
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
-    if d_col in df_master.columns:
-      df_master[d_col] = pd.to_datetime(
-          df_master[d_col].replace(
+    if d_col in filtered_master.columns:
+      filtered_master[d_col] = pd.to_datetime(
+          filtered_master[d_col].replace(
               ["", "None", "none", "NaN", "nan", "NaT", "nat"], pd.NaT
           ),
           errors="coerce",
@@ -277,307 +323,51 @@ with tab2:
 
   column_configurations = {}
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
-    if d_col in df_master.columns:
+    if d_col in filtered_master.columns:
       column_configurations[d_col] = st.column_config.DateColumn(
           label=d_col.replace("_", " ").title(), format="YYYY-MM-DD"
       )
 
-  if "status" in df_master.columns:
+  if "status" in filtered_master.columns:
     column_configurations["status"] = st.column_config.TextColumn(
         label="Status (Auto)", disabled=True
     )
 
-  edited_master = st.data_editor(
-      df_master,
+  edited_filtered_master = st.data_editor(
+      filtered_master,
       num_rows="dynamic",
       key="master_editor",
       column_config=column_configurations,
   )
 
   if st.button("💾 Save Master Sheet Changes to Server"):
+    # Re-integrate edited rows back into full master DataFrame safely via index matching
+    full_df = df_master.copy()
+    for idx, row in edited_filtered_master.iterrows():
+      if idx in full_df.index:
+        full_df.loc[idx] = row
+      else:
+        # Handle newly added rows from the data editor
+        full_df = pd.concat(
+            [full_df, pd.DataFrame([row])], ignore_index=True
+        )
+
     for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
-      if d_col in edited_master.columns:
-        edited_master[d_col] = pd.to_datetime(
-            edited_master[d_col], errors="coerce"
+      if d_col in full_df.columns:
+        full_df[d_col] = pd.to_datetime(
+            full_df[d_col], errors="coerce"
         ).dt.strftime("%Y-%m-%d")
-        edited_master[d_col] = edited_master[d_col].fillna("")
+        full_df[d_col] = full_df[d_col].fillna("")
 
     for w_col in ["actual_wt", "draw_total_wt"]:
-      if w_col in edited_master.columns:
-        edited_master[w_col] = pd.to_numeric(
-            edited_master[w_col], errors="coerce"
+      if w_col in full_df.columns:
+        full_df[w_col] = pd.to_numeric(
+            full_df[w_col], errors="coerce"
         ).round(3)
 
-    edited_master = calculate_automatic_status(edited_master)
-    save_master_to_db(edited_master)
+    full_df = calculate_automatic_status(full_df)
+    save_master_to_db(full_df)
     st.success(
         "Project master sheet successfully updated, auto-status calculated, and"
         " saved to server!"
     )
-    st.rerun()
-
-
-# --- HELPER: WEIGHT SUMMED AGEING REPORT WITH TOTAL ROW & STYLING ---
-def calculate_weight_ageing_report(
-    df, status_val, date_col, weight_col="draw_total_wt"
-):
-  empty_df = pd.DataFrame(
-      columns=[
-          "ProjectNo",
-          "0-7 Days",
-          "8-15 Days",
-          "16-30 Days",
-          "30-60 Days",
-          ">60 Days",
-          "Total Weight",
-      ]
-  )
-  if df.empty or "status" not in df.columns:
-    return empty_df
-
-  work_df = df[df["status"].astype(str).str.upper() == status_val.upper()].copy()
-  if work_df.empty:
-    return empty_df
-
-  today = pd.Timestamp.today().normalize()
-  if date_col in work_df.columns:
-    work_df[date_col] = pd.to_datetime(work_df[date_col], errors="coerce")
-    work_df["Age"] = (today - work_df[date_col]).dt.days
-  else:
-    work_df["Age"] = 0
-
-  def get_bucket(age):
-    if pd.isna(age) or age < 0:
-      return "Unknown"
-    elif age <= 7:
-      return "0-7 Days"
-    elif age <= 15:
-      return "8-15 Days"
-    elif age <= 30:
-      return "16-30 Days"
-    elif age <= 60:
-      return "30-60 Days"
-    else:
-      return ">60 Days"
-
-  work_df["Bucket"] = work_df["Age"].apply(get_bucket)
-  if weight_col not in work_df.columns:
-    weight_col = work_df.columns[11]
-
-  work_df[weight_col] = pd.to_numeric(
-      work_df[weight_col], errors="coerce"
-  ).fillna(0)
-  proj_col = "project_no" if "project_no" in work_df.columns else work_df.columns[2]
-
-  pivot = (
-      work_df.pivot_table(
-          index=proj_col,
-          columns="Bucket",
-          values=weight_col,
-          aggfunc="sum",
-          fill_value=0,
-      )
-      .reset_index()
-      .rename(columns={proj_col: "ProjectNo"})
-  )
-
-  expected_cols = [
-      "ProjectNo",
-      "0-7 Days",
-      "8-15 Days",
-      "16-30 Days",
-      "30-60 Days",
-      ">60 Days",
-  ]
-  for c in expected_cols:
-    if c not in pivot.columns:
-      pivot[c] = 0.0
-
-  bucket_cols = ["0-7 Days", "8-15 Days", "16-30 Days", "30-60 Days", ">60 Days"]
-  pivot["Total Weight"] = pivot[bucket_cols].sum(axis=1)
-  final_df = pivot[["ProjectNo"] + bucket_cols + ["Total Weight"]]
-
-  numeric_cols = final_df.select_dtypes(include=["number"]).columns
-  final_df[numeric_cols] = final_df[numeric_cols].round(3)
-
-  if not final_df.empty:
-    total_row = {
-        col: round(final_df[col].sum(), 3)
-        if col in numeric_cols
-        else ("TOTAL" if col == "ProjectNo" else "")
-        for col in final_df.columns
-    }
-    final_df = pd.concat([final_df, pd.DataFrame([total_row])], ignore_index=True)
-
-  return final_df
-
-
-def style_ageing_report(df):
-  if df.empty:
-    return df
-  styles = pd.DataFrame("", index=df.index, columns=df.columns)
-  if "Total Weight" in df.columns:
-    styles["Total Weight"] = "background-color: #e2f0d9; font-weight: bold;"
-
-  last_idx = df.index[-1]
-  if (
-      "ProjectNo" in df.columns
-      and str(df.loc[last_idx, "ProjectNo"]).strip().upper() == "TOTAL"
-  ):
-    styles.loc[last_idx, :] = "background-color: #fff2cc; font-weight: bold;"
-
-  return styles
-
-
-# --- TAB 3: WIP AGEING REPORT ---
-with tab3:
-  st.subheader("WIP Ageing Bucket Report (Sum of Total Weight & Totals)")
-  st.markdown(
-      "Calculated based on **Today's Date - WIP Date** for items with status"
-      " **WIP**, summing up `DRAW TOTAL WT` with summary totals at the bottom."
-  )
-  wip_rep = calculate_weight_ageing_report(df_master, "WIP", "wip_date")
-  if wip_rep.empty:
-    st.info("No data available for WIP ageing report.")
-  else:
-    numeric_cols = wip_rep.select_dtypes(include=["number"]).columns
-    styled_wip = (
-        wip_rep.style.apply(style_ageing_report, axis=None)
-        .format("{:.3f}", subset=numeric_cols)
-    )
-    st.dataframe(styled_wip, use_container_width=True)
-
-# --- TAB 4: RFD AGEING REPORT ---
-with tab4:
-  st.subheader("RFD Ageing Bucket Report (Sum of Total Weight & Totals)")
-  st.markdown(
-      "Calculated based on **Today's Date - RFD Date** for items with status"
-      " **RFD**, summing up `DRAW TOTAL WT` with summary totals at the bottom."
-  )
-  rfd_rep = calculate_weight_ageing_report(df_master, "RFD", "rfd_date")
-  if rfd_rep.empty:
-    st.info("No data available for RFD ageing report.")
-  else:
-    numeric_cols = rfd_rep.select_dtypes(include=["number"]).columns
-    styled_rfd = (
-        rfd_rep.style.apply(style_ageing_report, axis=None)
-        .format("{:.3f}", subset=numeric_cols)
-    )
-    st.dataframe(styled_rfd, use_container_width=True)
-
-
-# --- TAB 5: OVERALL PROJECT STATUS PIVOT ---
-with tab5:
-  st.subheader("Overall Project Status Summary Pivot")
-  st.markdown(
-      "Automatic pivot table summarizing total weight (`DRAW TOTAL WT`) by"
-      " Project Number, VLOOKUP Project Name (Customer Name) from Order Backlog,"
-      " and Status (`RFD`, `WIP`, `DISP`, `YTS`), with Grand Totals."
-  )
-
-
-  def calculate_overall_status_pivot(df_m, df_o, weight_col="draw_total_wt"):
-    if df_m.empty or "status" not in df_m.columns:
-      return pd.DataFrame(columns=["ProjectNo", "Project Name", "Grand Total"])
-
-    work_df = df_m.copy()
-    if weight_col not in work_df.columns:
-      weight_col = work_df.columns[11]
-
-    work_df[weight_col] = pd.to_numeric(
-        work_df[weight_col], errors="coerce"
-    ).fillna(0)
-    proj_col = (
-        "project_no" if "project_no" in work_df.columns else work_df.columns[2]
-    )
-
-    pivot = (
-        work_df.pivot_table(
-            index=proj_col,
-            columns="status",
-            values=weight_col,
-            aggfunc="sum",
-            fill_value=0,
-        )
-        .reset_index()
-        .rename(columns={proj_col: "ProjectNo"})
-    )
-
-    status_cols = [c for c in pivot.columns if c != "ProjectNo"]
-    pivot["Grand Total"] = pivot[status_cols].sum(axis=1)
-
-    # VLOOKUP Project Name / Customer Name from Order Backlog
-    if not df_o.empty:
-      job_col = (
-          "job_number"
-          if "job_number" in df_o.columns
-          else (df_o.columns[1] if len(df_o.columns) > 1 else None)
-      )
-      cust_col = (
-          "customer_name"
-          if "customer_name" in df_o.columns
-          else (df_o.columns[2] if len(df_o.columns) > 2 else None)
-      )
-
-      if job_col and cust_col:
-        mapping_dict = (
-            df_o.drop_duplicates(subset=[job_col])
-            .set_index(job_col)[cust_col]
-            .to_dict()
-        )
-        pivot["Project Name"] = (
-            pivot["ProjectNo"].astype(str).map(mapping_dict).fillna("N/A")
-        )
-      else:
-        pivot["Project Name"] = "N/A"
-    else:
-      pivot["Project Name"] = "N/A"
-
-    cols = ["ProjectNo", "Project Name"] + [
-        c for c in pivot.columns if c not in ["ProjectNo", "Project Name"]
-    ]
-    pivot = pivot[cols]
-
-    numeric_cols = pivot.select_dtypes(include=["number"]).columns
-    pivot[numeric_cols] = pivot[numeric_cols].round(3)
-
-    if not pivot.empty:
-      total_row = {
-          col: round(pivot[col].sum(), 3)
-          if col in numeric_cols
-          else ("Grand Total" if col == "ProjectNo" else "")
-          for col in pivot.columns
-      }
-      pivot = pd.concat([pivot, pd.DataFrame([total_row])], ignore_index=True)
-
-    return pivot
-
-
-  def style_overall_pivot(df):
-    if df.empty:
-      return df
-    styles = pd.DataFrame("", index=df.index, columns=df.columns)
-
-    if "Grand Total" in df.columns:
-      styles["Grand Total"] = "background-color: #e2f0d9; font-weight: bold;"
-
-    last_idx = df.index[-1]
-    if (
-        "ProjectNo" in df.columns
-        and str(df.loc[last_idx, "ProjectNo"]).strip().upper() == "GRAND TOTAL"
-    ):
-      styles.loc[last_idx, :] = "background-color: #fff2cc; font-weight: bold;"
-
-    return styles
-
-
-  overall_pivot = calculate_overall_status_pivot(df_master, df_orders)
-  if overall_pivot.empty:
-    st.info("No data available for overall status pivot.")
-  else:
-    numeric_cols = overall_pivot.select_dtypes(include=["number"]).columns
-    styled_pivot = (
-        overall_pivot.style.apply(style_overall_pivot, axis=None)
-        .format("{:.3f}", subset=numeric_cols)
-    )
-    st.dataframe(styled_pivot, use_container_width=True)
