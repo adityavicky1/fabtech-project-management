@@ -84,8 +84,8 @@ def load_data_from_db():
         "actual_wt": 2.268,
         "draw_total_wt": 2.268,
         "contractor": "MANOJ",
-        "status": "WIP",
-        "wip_date": "2026-02-25",
+        "status": "YTS",
+        "wip_date": "",
         "rfd_date": "",
         "dispatch_date": "",
     }])
@@ -107,9 +107,35 @@ def load_data_from_db():
   return df_master, df_orders
 
 
+# Function to automatically calculate status based on dates entered
+def calculate_automatic_status(df):
+  if df.empty:
+    return df
+
+  def derive_status(row):
+    dispatch = str(row.get("dispatch_date", "")).strip()
+    rfd = str(row.get("rfd_date", "")).strip()
+    wip = str(row.get("wip_date", "")).strip()
+
+    if dispatch and dispatch.lower() not in ["nan", "none", "nat", "", "NaT"]:
+      return "DISP"
+    elif rfd and rfd.lower() not in ["nan", "none", "nat", "", "NaT"]:
+      return "RFD"
+    elif wip and wip.lower() not in ["nan", "none", "nat", "", "NaT"]:
+      return "WIP"
+    else:
+      return "YTS"
+
+  if "status" in df.columns:
+    df["status"] = df.apply(derive_status, axis=1)
+  return df
+
+
 def save_master_to_db(df):
   if "part_sl_no" in df.columns:
     df["part_sl_no"] = df["part_sl_no"].astype(str)
+  # Recalculate status before saving
+  df = calculate_automatic_status(df)
   conn = sqlite3.connect(DB_FILE)
   df.to_sql("master_sheet", conn, if_exists="replace", index=False)
   conn.close()
@@ -125,8 +151,8 @@ df_master, df_orders = load_data_from_db()
 
 st.title("⚙️ FabTech Fabrication Project Management & Tracking Portal")
 st.markdown(
-    "Server-Persistent Master Data, Order Backlog Upload, and Weight-Summed"
-    " Ageing Reports with Totals."
+    "Server-Persistent Master Data, Auto-Status Calculation, and Weight-Summed"
+    " Ageing Reports."
 )
 
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -139,11 +165,6 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # --- TAB 1: ORDER BACKLOG & UPLOAD ---
 with tab1:
   st.subheader("Order Backlog Management & Master Upload")
-  st.markdown(
-      "Upload your Order Backlog Excel/CSV file or edit online. Changes are"
-      " saved permanently to the server."
-  )
-
   uploaded_order_file = st.file_uploader(
       "Upload Order Backlog Excel/CSV", type=["xlsx", "csv"], key="order_upload"
   )
@@ -173,11 +194,11 @@ with tab1:
 # --- TAB 2: PROJECT MASTER SHEET ---
 with tab2:
   st.subheader(
-      "Project Master Sheet (Server Persistent & Text Part Serial No)"
+      "Project Master Sheet (Auto-Status & Calendar Date Pickers)"
   )
   st.markdown(
-      "Upload your master template (Part Serial No handled strictly as text)"
-      " or edit online."
+      "Upload master template or edit online. Status is calculated"
+      " automatically based on dates."
   )
 
   uploaded_file = st.file_uploader(
@@ -205,14 +226,39 @@ with tab2:
     except Exception as e:
       st.error(f"Error processing uploaded file: {e}")
 
+  # Ensure status is up-to-date before displaying
+  df_master = calculate_automatic_status(df_master)
+
+  # Configure interactive online editor with Calendar Date Pickers for date columns
+  column_configurations = {}
+  for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
+    if d_col in df_master.columns:
+      column_configurations[d_col] = st.column_config.DateColumn(
+          label=d_col.replace("_", " ").title(), format="YYYY-MM-DD"
+      )
+
+  # Make status column disabled/read-only since it calculates automatically
+  if "status" in df_master.columns:
+    column_configurations["status"] = st.column_config.TextColumn(
+        label="Status (Auto)", disabled=True
+    )
+
   edited_master = st.data_editor(
-      df_master, num_rows="dynamic", key="master_editor"
+      df_master,
+      num_rows="dynamic",
+      key="master_editor",
+      column_config=column_configurations,
   )
+
   if st.button("💾 Save Master Sheet Changes to Server"):
+    # Recalculate status on edited data before saving
+    edited_master = calculate_automatic_status(edited_master)
     save_master_to_db(edited_master)
     st.success(
-        "Project master sheet successfully updated and saved to server database!"
+        "Project master sheet successfully updated, auto-status calculated, and"
+        " saved to server!"
     )
+    st.rerun()
 
 
 # --- HELPER: WEIGHT SUMMED AGEING REPORT WITH TOTAL ROW ---
@@ -272,7 +318,7 @@ def calculate_weight_ageing_report(
           index=proj_col,
           columns="Bucket",
           values=weight_col,
-          aggfunc="sum",
+      aggfunc="sum",
           fill_value=0,
       )
       .reset_index()
