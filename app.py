@@ -85,9 +85,9 @@ def load_data_from_db():
         "draw_total_wt": 2.268,
         "contractor": "MANOJ",
         "status": "YTS",
-        "wip_date": "",
-        "rfd_date": "",
-        "dispatch_date": "",
+        "wip_date": None,
+        "rfd_date": None,
+        "dispatch_date": None,
     }])
   if df_orders.empty:
     df_orders = pd.DataFrame([{
@@ -117,11 +117,18 @@ def calculate_automatic_status(df):
     rfd = str(row.get("rfd_date", "")).strip()
     wip = str(row.get("wip_date", "")).strip()
 
-    if dispatch and dispatch.lower() not in ["nan", "none", "nat", "", "NaT"]:
+    if dispatch and dispatch.lower() not in [
+        "nan",
+        "none",
+        "nat",
+        "",
+        "NaT",
+        "nat",
+    ]:
       return "DISP"
-    elif rfd and rfd.lower() not in ["nan", "none", "nat", "", "NaT"]:
+    elif rfd and rfd.lower() not in ["nan", "none", "nat", "", "NaT", "nat"]:
       return "RFD"
-    elif wip and wip.lower() not in ["nan", "none", "nat", "", "NaT"]:
+    elif wip and wip.lower() not in ["nan", "none", "nat", "", "NaT", "nat"]:
       return "WIP"
     else:
       return "YTS"
@@ -134,7 +141,6 @@ def calculate_automatic_status(df):
 def save_master_to_db(df):
   if "part_sl_no" in df.columns:
     df["part_sl_no"] = df["part_sl_no"].astype(str)
-  # Recalculate status before saving
   df = calculate_automatic_status(df)
   conn = sqlite3.connect(DB_FILE)
   df.to_sql("master_sheet", conn, if_exists="replace", index=False)
@@ -193,9 +199,7 @@ with tab1:
 
 # --- TAB 2: PROJECT MASTER SHEET ---
 with tab2:
-  st.subheader(
-      "Project Master Sheet (Auto-Status & Calendar Date Pickers)"
-  )
+  st.subheader("Project Master Sheet (Auto-Status & Calendar Date Pickers)")
   st.markdown(
       "Upload master template or edit online. Status is calculated"
       " automatically based on dates."
@@ -226,10 +230,18 @@ with tab2:
     except Exception as e:
       st.error(f"Error processing uploaded file: {e}")
 
-  # Ensure status is up-to-date before displaying
+  # Ensure status is up-to-date and clean up date columns for st.data_editor
   df_master = calculate_automatic_status(df_master)
+  for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
+    if d_col in df_master.columns:
+      df_master[d_col] = pd.to_datetime(
+          df_master[d_col].replace(
+              ["", "None", "none", "NaN", "nan", "NaT", "nat"], pd.NaT
+          ),
+          errors="coerce",
+      ).dt.date
 
-  # Configure interactive online editor with Calendar Date Pickers for date columns
+  # Configure interactive online editor with Calendar Date Pickers
   column_configurations = {}
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
     if d_col in df_master.columns:
@@ -237,7 +249,6 @@ with tab2:
           label=d_col.replace("_", " ").title(), format="YYYY-MM-DD"
       )
 
-  # Make status column disabled/read-only since it calculates automatically
   if "status" in df_master.columns:
     column_configurations["status"] = st.column_config.TextColumn(
         label="Status (Auto)", disabled=True
@@ -251,7 +262,14 @@ with tab2:
   )
 
   if st.button("💾 Save Master Sheet Changes to Server"):
-    # Recalculate status on edited data before saving
+    # Convert date objects back to strings for SQLite storage
+    for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
+      if d_col in edited_master.columns:
+        edited_master[d_col] = pd.to_datetime(
+            edited_master[d_col], errors="coerce"
+        ).dt.strftime("%Y-%m-%d")
+        edited_master[d_col] = edited_master[d_col].fillna("")
+
     edited_master = calculate_automatic_status(edited_master)
     save_master_to_db(edited_master)
     st.success(
@@ -318,7 +336,7 @@ def calculate_weight_ageing_report(
           index=proj_col,
           columns="Bucket",
           values=weight_col,
-      aggfunc="sum",
+          aggfunc="sum",
           fill_value=0,
       )
       .reset_index()
