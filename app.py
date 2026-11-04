@@ -212,7 +212,6 @@ with tab1:
       column_config=order_column_configs,
   )
   if st.button("💾 Save Order Backlog to Server"):
-    # Convert dates back to string format before saving
     if "end_delivery_date" in edited_orders.columns:
       edited_orders["end_delivery_date"] = pd.to_datetime(
           edited_orders["end_delivery_date"], errors="coerce"
@@ -257,7 +256,6 @@ with tab2:
     except Exception as e:
       st.error(f"Error processing uploaded file: {e}")
 
-  # Ensure status is up-to-date and clean up date columns for st.data_editor
   df_master = calculate_automatic_status(df_master)
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
     if d_col in df_master.columns:
@@ -459,7 +457,6 @@ with tab5:
 
     # VLOOKUP Project Name / Customer Name from Order Backlog
     if not df_o.empty:
-      # Identify job number and customer columns dynamically or by standard names
       job_col = (
           "job_number"
           if "job_number" in df_o.columns
@@ -472,7 +469,6 @@ with tab5:
       )
 
       if job_col and cust_col:
-        # Create a mapping dictionary for vlookup
         mapping_dict = (
             df_o.drop_duplicates(subset=[job_col])
             .set_index(job_col)[cust_col]
@@ -486,7 +482,6 @@ with tab5:
     else:
       pivot["Project Name"] = "N/A"
 
-    # Reorder columns to place Project Name right after ProjectNo
     cols = ["ProjectNo", "Project Name"] + [
         c for c in pivot.columns if c not in ["ProjectNo", "Project Name"]
     ]
@@ -505,8 +500,30 @@ with tab5:
     return pivot
 
 
+  # Function to style/color Grand Total column and Grand Total summary row
+  def style_overall_pivot(df):
+    if df.empty:
+      return df
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+
+    # Highlight 'Grand Total' column in soft blue
+    if "Grand Total" in df.columns:
+      styles["Grand Total"] = "background-color: #e2f0d9; font-weight: bold;"
+
+    # Highlight 'Grand Total' summary row at the bottom in soft yellow/orange
+    last_idx = df.index[-1]
+    if (
+        "ProjectNo" in df.columns
+        and str(df.loc[last_idx, "ProjectNo"]).strip().upper() == "GRAND TOTAL"
+    ):
+      styles.loc[last_idx, :] = "background-color: #fff2cc; font-weight: bold;"
+
+    return styles
+
+
   overall_pivot = calculate_overall_status_pivot(df_master, df_orders)
   if overall_pivot.empty:
     st.info("No data available for overall status pivot.")
   else:
-    st.dataframe(overall_pivot, use_container_width=True)
+    styled_pivot = overall_pivot.style.apply(style_overall_pivot, axis=None)
+    st.dataframe(styled_pivot, use_container_width=True)
