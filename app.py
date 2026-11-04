@@ -271,7 +271,6 @@ with tab2:
   with st.expander(
       "🔍 Advanced Dynamic Column Filters (Filter any column)", expanded=True
   ):
-    # Select which column to filter by dynamically
     all_columns = list(df_master.columns)
     filter_column = st.selectbox(
         "Select Column to Filter By",
@@ -282,7 +281,6 @@ with tab2:
     filtered_master = df_master.copy()
 
     if filter_column != "None":
-      # Get unique values for the chosen column
       unique_vals = sorted(
           df_master[filter_column].dropna().astype(str).unique().tolist()
       )
@@ -295,7 +293,6 @@ with tab2:
             filtered_master[filter_column].astype(str).isin(selected_vals)
         ]
 
-      # Optional second filter level for convenience
       filter_column_2 = st.selectbox(
           "Select Second Column to Filter By (Optional)",
           options=["None"] + all_columns,
@@ -347,11 +344,14 @@ with tab2:
   )
 
   if st.button("💾 Save Master Sheet Changes to Server"):
-    # Re-integrate edited rows back into full master DataFrame safely via index matching
     full_df = df_master.copy()
+
+    # Safely update edited rows or append newly created rows
     for idx, row in edited_filtered_master.iterrows():
       if idx in full_df.index:
-        full_df.loc[idx] = row
+        for col in full_df.columns:
+          if col in row:
+            full_df.at[idx, col] = row[col]
       else:
         full_df = pd.concat(
             [full_df, pd.DataFrame([row])], ignore_index=True
