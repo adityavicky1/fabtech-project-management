@@ -440,7 +440,12 @@ with tab3:
   if wip_rep.empty:
     st.info("No data available for WIP ageing report.")
   else:
-    st.dataframe(wip_rep.style.apply(style_ageing_report, axis=None), use_container_width=True)
+    numeric_cols = wip_rep.select_dtypes(include=["number"]).columns
+    styled_wip = (
+        wip_rep.style.apply(style_ageing_report, axis=None)
+        .format("{:.3f}", subset=numeric_cols)
+    )
+    st.dataframe(styled_wip, use_container_width=True)
 
 # --- TAB 4: RFD AGEING REPORT ---
 with tab4:
@@ -453,7 +458,12 @@ with tab4:
   if rfd_rep.empty:
     st.info("No data available for RFD ageing report.")
   else:
-    st.dataframe(rfd_rep.style.apply(style_ageing_report, axis=None), use_container_width=True)
+    numeric_cols = rfd_rep.select_dtypes(include=["number"]).columns
+    styled_rfd = (
+        rfd_rep.style.apply(style_ageing_report, axis=None)
+        .format("{:.3f}", subset=numeric_cols)
+    )
+    st.dataframe(styled_rfd, use_container_width=True)
 
 
 # --- TAB 5: OVERALL PROJECT STATUS PIVOT ---
@@ -565,5 +575,9 @@ with tab5:
   if overall_pivot.empty:
     st.info("No data available for overall status pivot.")
   else:
-    styled_pivot = overall_pivot.style.apply(style_overall_pivot, axis=None)
+    numeric_cols = overall_pivot.select_dtypes(include=["number"]).columns
+    styled_pivot = (
+        overall_pivot.style.apply(style_overall_pivot, axis=None)
+        .format("{:.3f}", subset=numeric_cols)
+    )
     st.dataframe(styled_pivot, use_container_width=True)
