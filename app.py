@@ -69,6 +69,13 @@ def load_data_from_db():
   if not df_master.empty and "part_sl_no" in df_master.columns:
     df_master["part_sl_no"] = df_master["part_sl_no"].astype(str)
 
+  # Round weights to 3 decimal places if present
+  for w_col in ["actual_wt", "draw_total_wt"]:
+    if not df_master.empty and w_col in df_master.columns:
+      df_master[w_col] = pd.to_numeric(
+          df_master[w_col], errors="coerce"
+      ).round(3)
+
   if df_master.empty:
     df_master = pd.DataFrame([{
         "sr_no": "1",
@@ -140,6 +147,9 @@ def calculate_automatic_status(df):
 def save_master_to_db(df):
   if "part_sl_no" in df.columns:
     df["part_sl_no"] = df["part_sl_no"].astype(str)
+  for w_col in ["actual_wt", "draw_total_wt"]:
+    if w_col in df.columns:
+      df[w_col] = pd.to_numeric(df[w_col], errors="coerce").round(3)
   df = calculate_automatic_status(df)
   conn = sqlite3.connect(DB_FILE)
   df.to_sql("master_sheet", conn, if_exists="replace", index=False)
@@ -190,7 +200,6 @@ with tab1:
     except Exception as e:
       st.error(f"Error processing order file: {e}")
 
-  # Format end_delivery_date as dates for calendar picker in order backlog
   if "end_delivery_date" in df_orders.columns:
     df_orders["end_delivery_date"] = pd.to_datetime(
         df_orders["end_delivery_date"].replace(
@@ -293,6 +302,12 @@ with tab2:
         ).dt.strftime("%Y-%m-%d")
         edited_master[d_col] = edited_master[d_col].fillna("")
 
+    for w_col in ["actual_wt", "draw_total_wt"]:
+      if w_col in edited_master.columns:
+        edited_master[w_col] = pd.to_numeric(
+            edited_master[w_col], errors="coerce"
+        ).round(3)
+
     edited_master = calculate_automatic_status(edited_master)
     save_master_to_db(edited_master)
     st.success(
@@ -302,7 +317,7 @@ with tab2:
     st.rerun()
 
 
-# --- HELPER: WEIGHT SUMMED AGEING REPORT WITH TOTAL ROW ---
+# --- HELPER: WEIGHT SUMMED AGEING REPORT WITH TOTAL ROW & STYLING ---
 def calculate_weight_ageing_report(
     df, status_val, date_col, weight_col="draw_total_wt"
 ):
@@ -382,16 +397,37 @@ def calculate_weight_ageing_report(
   pivot["Total Weight"] = pivot[bucket_cols].sum(axis=1)
   final_df = pivot[["ProjectNo"] + bucket_cols + ["Total Weight"]]
 
+  # Round all numeric weight columns to 3 decimal places
+  numeric_cols = final_df.select_dtypes(include=["number"]).columns
+  final_df[numeric_cols] = final_df[numeric_cols].round(3)
+
   if not final_df.empty:
-    numeric_cols = final_df.select_dtypes(include=["number"]).columns
     total_row = {
         col: final_df[col].sum() if col in numeric_cols else ""
         for col in final_df.columns
     }
     total_row["ProjectNo"] = "TOTAL"
+    total_row[numeric_cols] = pd.Series(total_row[numeric_cols]).round(3)
     final_df = pd.concat([final_df, pd.DataFrame([total_row])], ignore_index=True)
 
   return final_df
+
+
+def style_ageing_report(df):
+  if df.empty:
+    return df
+  styles = pd.DataFrame("", index=df.index, columns=df.columns)
+  if "Total Weight" in df.columns:
+    styles["Total Weight"] = "background-color: #e2f0d9; font-weight: bold;"
+
+  last_idx = df.index[-1]
+  if (
+      "ProjectNo" in df.columns
+      and str(df.loc[last_idx, "ProjectNo"]).strip().upper() == "TOTAL"
+  ):
+    styles.loc[last_idx, :] = "background-color: #fff2cc; font-weight: bold;"
+
+  return styles
 
 
 # --- TAB 3: WIP AGEING REPORT ---
@@ -402,7 +438,10 @@ with tab3:
       " **WIP**, summing up `DRAW TOTAL WT` with summary totals at the bottom."
   )
   wip_rep = calculate_weight_ageing_report(df_master, "WIP", "wip_date")
-  st.dataframe(wip_rep, use_container_width=True)
+  if wip_rep.empty:
+    st.info("No data available for WIP ageing report.")
+  else:
+    st.dataframe(wip_rep.style.apply(style_ageing_report, axis=None), use_container_width=True)
 
 # --- TAB 4: RFD AGEING REPORT ---
 with tab4:
@@ -412,7 +451,10 @@ with tab4:
       " **RFD**, summing up `DRAW TOTAL WT` with summary totals at the bottom."
   )
   rfd_rep = calculate_weight_ageing_report(df_master, "RFD", "rfd_date")
-  st.dataframe(rfd_rep, use_container_width=True)
+  if rfd_rep.empty:
+    st.info("No data available for RFD ageing report.")
+  else:
+    st.dataframe(rfd_rep.style.apply(style_ageing_report, axis=None), use_container_width=True)
 
 
 # --- TAB 5: OVERALL PROJECT STATUS PIVOT ---
@@ -457,73 +499,4 @@ with tab5:
 
     # VLOOKUP Project Name / Customer Name from Order Backlog
     if not df_o.empty:
-      job_col = (
-          "job_number"
-          if "job_number" in df_o.columns
-          else (df_o.columns[1] if len(df_o.columns) > 1 else None)
-      )
-      cust_col = (
-          "customer_name"
-          if "customer_name" in df_o.columns
-          else (df_o.columns[2] if len(df_o.columns) > 2 else None)
-      )
-
-      if job_col and cust_col:
-        mapping_dict = (
-            df_o.drop_duplicates(subset=[job_col])
-            .set_index(job_col)[cust_col]
-            .to_dict()
-        )
-        pivot["Project Name"] = (
-            pivot["ProjectNo"].astype(str).map(mapping_dict).fillna("N/A")
-        )
-      else:
-        pivot["Project Name"] = "N/A"
-    else:
-      pivot["Project Name"] = "N/A"
-
-    cols = ["ProjectNo", "Project Name"] + [
-        c for c in pivot.columns if c not in ["ProjectNo", "Project Name"]
-    ]
-    pivot = pivot[cols]
-
-    if not pivot.empty:
-      numeric_cols = pivot.select_dtypes(include=["number"]).columns
-      total_row = {
-          col: pivot[col].sum() if col in numeric_cols else ""
-          for col in pivot.columns
-      }
-      total_row["ProjectNo"] = "Grand Total"
-      total_row["Project Name"] = ""
-      pivot = pd.concat([pivot, pd.DataFrame([total_row])], ignore_index=True)
-
-    return pivot
-
-
-  # Function to style/color Grand Total column and Grand Total summary row
-  def style_overall_pivot(df):
-    if df.empty:
-      return df
-    styles = pd.DataFrame("", index=df.index, columns=df.columns)
-
-    # Highlight 'Grand Total' column in soft blue
-    if "Grand Total" in df.columns:
-      styles["Grand Total"] = "background-color: #e2f0d9; font-weight: bold;"
-
-    # Highlight 'Grand Total' summary row at the bottom in soft yellow/orange
-    last_idx = df.index[-1]
-    if (
-        "ProjectNo" in df.columns
-        and str(df.loc[last_idx, "ProjectNo"]).strip().upper() == "GRAND TOTAL"
-    ):
-      styles.loc[last_idx, :] = "background-color: #fff2cc; font-weight: bold;"
-
-    return styles
-
-
-  overall_pivot = calculate_overall_status_pivot(df_master, df_orders)
-  if overall_pivot.empty:
-    st.info("No data available for overall status pivot.")
-  else:
-    styled_pivot = overall_pivot.style.apply(style_overall_pivot, axis=None)
-    st.dataframe(styled_pivot, use_container_width=True)
+      job_col
