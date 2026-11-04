@@ -1,5 +1,6 @@
 import datetime
-import io
+import os
+import sqlite3
 import pandas as pd
 import streamlit as st
 
@@ -7,221 +8,206 @@ st.set_page_config(
     page_title="FabTech Project Management System", layout="wide"
 )
 
-# Initialize Session State Data if not present
-if "order_backlog" not in st.session_state:
-  st.session_state.order_backlog = pd.DataFrame([
-      {
-          "Sl No": 1,
-          "Job Number": 201,
-          "Customer Name": "Adani Pirapanti",
-          "Type of Project": "Power Plant",
-          "Place": "Bhagalpur",
-          "State": "Bihar",
-          "Country": "India",
-          "PO Number": "2002323",
-          "PO Line Item": 10,
-          "Po Qty": 1000,
-          "PO Rate": 105000,
-          "End Delivery Date": "2027-12-31",
-      },
-      {
-          "Sl No": 2,
-          "Job Number": 202,
-          "Customer Name": "Adani Pirapanti",
-          "Type of Project": "Power Plant",
-          "Place": "Bhagalpur",
-          "State": "Bihar",
-          "Country": "India",
-          "PO Number": "2002323",
-          "PO Line Item": 20,
-          "Po Qty": 500,
-          "PO Rate": 110000,
-          "End Delivery Date": "2027-01-31",
-      },
-  ])
+DB_FILE = "fabtech_server_data.db"
 
-if "master_sheet" not in st.session_state:
-  st.session_state.master_sheet = pd.DataFrame([
-      {
-          "SR NO.": 1,
-          "Project No": 201,
-          "DESCRIPTION": "CT-T1",
-          "Mark No": "MB-1",
-          "QTY": 1,
-          "STATUS": "WIP",
-          "WIP Date": "2026-02-25",
-          "RFD Date": pd.NaT,
-      },
-      {
-          "SR NO.": 2,
-          "Project No": 201,
-          "DESCRIPTION": "CT-T1",
-          "Mark No": "MB-2",
-          "QTY": 1,
-          "STATUS": "RFD",
-          "WIP Date": "2026-01-10",
-          "RFD Date": "2026-02-15",
-      },
-      {
-          "SR NO.": 3,
-          "Project No": 202,
-          "DESCRIPTION": "BLR-01",
-          "Mark No": "COL-1",
-          "QTY": 2,
-          "STATUS": "WIP",
-          "WIP Date": "2026-10-15",
-          "RFD Date": pd.NaT,
-      },
-  ])
 
-st.title("⚙️ FabTech Project Management & Tracking Portal")
+# Initialize SQLite Server Database for Persistence
+def init_db():
+  conn = sqlite3.connect(DB_FILE)
+  cursor = conn.cursor()
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS master_sheet (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sr_no TEXT,
+            unique_id TEXT,
+            project_no TEXT,
+            description TEXT,
+            revision_no TEXT,
+            drawing_no TEXT,
+            element_type TEXT,
+            mark_no TEXT,
+            qty REAL,
+            part_sl_no TEXT,
+            actual_wt REAL,
+            draw_total_wt REAL,
+            contractor TEXT,
+            status TEXT,
+            wip_date TEXT,
+            rfd_date TEXT,
+            dispatch_date TEXT
+        )
+    """)
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS order_backlog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sl_no TEXT,
+            job_number TEXT,
+            customer_name TEXT,
+            type_of_project TEXT,
+            place TEXT,
+            state TEXT,
+            country TEXT,
+            po_number TEXT,
+            po_line_item TEXT,
+            po_qty REAL,
+            po_rate REAL,
+            end_delivery_date TEXT
+        )
+    """)
+  conn.commit()
+  conn.close()
+
+
+def load_data_from_db():
+  init_db()
+  conn = sqlite3.connect(DB_FILE)
+  df_master = pd.read_sql("SELECT * FROM master_sheet", conn)
+  df_orders = pd.read_sql("SELECT * FROM order_backlog", conn)
+  conn.close()
+
+  # Seed default sample data if tables are empty
+  if df_master.empty:
+    df_master = pd.DataFrame([
+        {
+            "sr_no": "1",
+            "unique_id": "201-CT-T1-MB-1",
+            "project_no": "201",
+            "description": "CT-T1",
+            "revision_no": "Rev-00",
+            "drawing_no": "024014-Q",
+            "element_type": "MAIN BEAM",
+            "mark_no": "MB-1",
+            "qty": 1,
+            "part_sl_no": "1/2",
+            "actual_wt": 2.268,
+            "draw_total_wt": 2.268,
+            "contractor": "MANOJ",
+            "status": "WIP",
+            "wip_date": "2026-02-25",
+            "rfd_date": "",
+            "dispatch_date": "",
+        },
+        {
+            "sr_no": "2",
+            "unique_id": "201-CT-T1-MB-2",
+            "project_no": "201",
+            "description": "CT-T1",
+            "revision_no": "Rev-00",
+            "drawing_no": "024014-Q",
+            "element_type": "MAIN BEAM",
+            "mark_no": "MB-2",
+            "qty": 1,
+            "part_sl_no": "2/2",
+            "actual_wt": 2.268,
+            "draw_total_wt": 2.268,
+            "contractor": "MANOJ",
+            "status": "RFD",
+            "wip_date": "2026-01-10",
+            "rfd_date": "2026-02-15",
+            "dispatch_date": "",
+        },
+    ])
+  if df_orders.empty:
+    df_orders = pd.DataFrame([{
+        "sl_no": "1",
+        "job_number": "201",
+        "customer_name": "Adani Pirapanti",
+        "type_of_project": "Power Plant",
+        "place": "Bhagalpur",
+        "state": "Bihar",
+        "country": "India",
+        "po_number": "2002323",
+        "po_line_item": "10",
+        "po_qty": 1000,
+        "po_rate": 105000,
+        "end_delivery_date": "2027-12-31",
+    }])
+  return df_master, df_orders
+
+
+def save_master_to_db(df):
+  conn = sqlite3.connect(DB_FILE)
+  df.to_sql("master_sheet", conn, if_exists="replace", index=False)
+  conn.close()
+
+
+def save_orders_to_db(df):
+  conn = sqlite3.connect(DB_FILE)
+  df.to_sql("order_backlog", conn, if_exists="replace", index=False)
+  conn.close()
+
+
+df_master, df_orders = load_data_from_db()
+
+st.title("⚙️ FabTech Fabrication Project Management & Tracking Portal")
 st.markdown(
-    "Manage Order Backlogs, Shop-Floor Mark Numbers, and Automated Ageing"
+    "Server-Persistent Master Data, Online Editing, and Weight-Summed Ageing"
     " Buckets."
 )
 
 tab1, tab2, tab3, tab4 = st.tabs([
     "1. Order Backlog",
     "2. Project Master Sheet",
-    "3. WIP Ageing Report",
-    "4. RFD Ageing Report",
+    "3. WIP Ageing Report (Weight Sum)",
+    "4. RFD Ageing Report (Weight Sum)",
 ])
 
 # --- TAB 1: ORDER BACKLOG ---
 with tab1:
   st.subheader("Order Backlog Management")
-  st.markdown(
-      "Edit orders online or download the master template for bulk upload."
-  )
-
-  # Download template
-  buffer = io.BytesIO()
-  with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-    st.session_state.order_backlog.to_excel(
-        writer, index=False, sheet_name="Order Backlog"
-    )
-  st.download_button(
-      label="📥 Download Order Backlog Template",
-      data=buffer.getvalue(),
-      file_name="Order_Backlog_Template.xlsx",
-      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  )
-
-  # Upload master data
-  uploaded_file = st.file_uploader(
-      "Upload Master Excel (Order Backlog)", type=["xlsx", "csv"], key="order_up"
-  )
-  if uploaded_file is not None:
-    if uploaded_file.name.endswith(".csv"):
-      st.session_state.order_backlog = pd.read_csv(uploaded_file)
-    else:
-      st.session_state.order_backlog = pd.read_excel(uploaded_file)
-    st.success("Order backlog updated successfully from file!")
-
-  # Interactive online editor
-  st.markdown("### Online Order Table Editor")
   edited_orders = st.data_editor(
-      st.session_state.order_backlog, num_rows="dynamic", key="order_editor"
+      df_orders, num_rows="dynamic", key="orders_editor"
   )
-  st.session_state.order_backlog = edited_orders
+  if st.button("💾 Save Order Backlog to Server"):
+    save_orders_to_db(edited_orders)
+    st.success("Order backlog successfully saved to server database!")
 
 # --- TAB 2: PROJECT MASTER SHEET ---
 with tab2:
-  st.subheader("Project Master Sheet (Mark Numbers & Status)")
+  st.subheader("Project Master Sheet (Server Persistent)")
   st.markdown(
-      "Track individual mark numbers, production status, WIP dates, and RFD"
-      " dates."
+      "Upload master sheets or edit online. Data is saved permanently on the"
+      " server."
   )
 
-  # Download Master Template Button
-  import io
-
-  buffer = io.BytesIO()
-  with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-    st.session_state.master_sheet.to_excel(
-        writer, index=False, sheet_name="Sample Master Sheet"
-    )
-  st.download_button(
-      label="📥 Download Project Master Template",
-      data=buffer.getvalue(),
-      file_name="Project_Master_Template.xlsx",
-      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  uploaded_file = st.file_uploader(
+      "Upload Project Master Excel/CSV", type=["xlsx", "csv"], key="master_upload"
   )
-
-  # Upload Master Data with automatic cleaning
-  uploaded_master = st.file_uploader(
-      "Upload Master Excel (Project Master)",
-      type=["xlsx", "csv"],
-      key="master_up",
-  )
-
-  if uploaded_master is not None:
+  if uploaded_file is not None:
     try:
-      if uploaded_master.name.endswith(".csv"):
-        df_uploaded = pd.read_csv(uploaded_master)
+      if uploaded_file.name.endswith(".csv"):
+        df_new = pd.read_csv(uploaded_file)
       else:
-        df_uploaded = pd.read_excel(uploaded_master)
+        df_new = pd.read_excel(uploaded_file)
 
-      # 1. Clean column names (strip whitespace and standardise casing if needed)
-      df_uploaded.columns = df_uploaded.columns.str.strip()
-
-      # 2. Ensure standard column names exist
-      if "STATUS" not in df_uploaded.columns and "Status" in df_uploaded.columns:
-        df_uploaded.rename(columns={"Status": "STATUS"}, inplace=True)
-      if (
-          "Project No" not in df_uploaded.columns
-          and "ProjectNo" in df_uploaded.columns
-      ):
-        df_uploaded.rename(columns={"ProjectNo": "Project No"}, inplace=True)
-
-      # 3. Convert date columns properly
-      for d_col in ["WIP Date", "RFD Date"]:
-        if d_col in df_uploaded.columns:
-          df_uploaded[d_col] = pd.to_datetime(
-              df_uploaded[d_col], errors="coerce"
-          ).dt.strftime("%Y-%m-%d")
-
-      st.session_state.master_sheet = df_uploaded
+      # Clean and standardize column names for the server database
+      df_new.columns = [
+          c.strip().lower().replace(" ", "_").replace(".", "")
+          for c in df_new.columns
+      ]
+      save_master_to_db(df_new)
       st.success(
-          "Project master sheet uploaded and cleaned successfully! Ageing"
-          " reports updated."
+          "Project master sheet uploaded and saved permanently to server!"
       )
-      st.rerun()  # Force instant refresh of all tabs
-
+      st.rerun()
     except Exception as e:
       st.error(f"Error processing uploaded file: {e}")
 
-  # Filter by project
-  if "Project No" in st.session_state.master_sheet.columns:
-    proj_list = st.session_state.master_sheet["Project No"].dropna().unique()
-    selected_proj = st.selectbox(
-        "Select Project Number to Filter", options=["All"] + list(proj_list)
+  edited_master = st.data_editor(
+      df_master, num_rows="dynamic", key="master_editor"
+  )
+  if st.button("💾 Save Master Sheet Changes to Server"):
+    save_master_to_db(edited_master)
+    st.success(
+        "Project master sheet successfully updated and saved to server database!"
     )
 
-    display_df = st.session_state.master_sheet
-    if selected_proj != "All":
-      display_df = display_df[display_df["Project No"] == selected_proj]
 
-    edited_master = st.data_editor(
-        display_df, num_rows="dynamic", key="master_editor"
-    )
-
-    if selected_proj == "All":
-      st.session_state.master_sheet = edited_master
-    else:
-      # Update the matching rows in the main session state dataframe
-      st.session_state.master_sheet.update(edited_master)
-  else:
-    st.warning(
-        "The uploaded sheet is missing the 'Project No' column. Please check"
-        " your template."
-    )# --- HELPER FUNCTION FOR AGEING BUCKETS ---
-def calculate_ageing_report(df, status_filter, date_col):
-  if df.empty:
-    return pd.DataFrame()
-
-  working_df = df[df["STATUS"] == status_filter].copy()
-  if working_df.empty:
+# --- HELPER: AGEING BUCKET CALCULATOR WITH WEIGHT SUM ---
+def calculate_weight_ageing_report(
+    df, status_val, date_col, weight_col="draw_total_wt"
+):
+  if df.empty or "status" not in df.columns:
     return pd.DataFrame(
         columns=[
             "ProjectNo",
@@ -230,12 +216,30 @@ def calculate_ageing_report(df, status_filter, date_col):
             "16-30 Days",
             "30-60 Days",
             ">60 Days",
+            "Total Weight",
+        ]
+    )
+
+  work_df = df[df["status"].astype(str).str.upper() == status_val.upper()].copy()
+  if work_df.empty:
+    return pd.DataFrame(
+        columns=[
+            "ProjectNo",
+            "0-7 Days",
+            "8-15 Days",
+            "16-30 Days",
+            "30-60 Days",
+            ">60 Days",
+            "Total Weight",
         ]
     )
 
   today = pd.Timestamp.today().normalize()
-  working_df[date_col] = pd.to_datetime(working_df[date_col], errors="coerce")
-  working_df["Age"] = (today - working_df[date_col]).dt.days
+  if date_col in work_df.columns:
+    work_df[date_col] = pd.to_datetime(work_df[date_col], errors="coerce")
+    work_df["Age"] = (today - work_df[date_col]).dt.days
+  else:
+    work_df["Age"] = 0
 
   def get_bucket(age):
     if pd.isna(age) or age < 0:
@@ -251,21 +255,30 @@ def calculate_ageing_report(df, status_filter, date_col):
     else:
       return ">60 Days"
 
-  working_df["Bucket"] = working_df["Age"].apply(get_bucket)
+  work_df["Bucket"] = work_df["Age"].apply(get_bucket)
+
+  if weight_col not in work_df.columns:
+    # Fallback to numeric column if weight column name differs
+    numeric_cols = work_df.select_dtypes(include=["number"]).columns
+    weight_col = numeric_cols[0] if len(numeric_cols) > 0 else work_df.columns[11]
+
+  work_df[weight_col] = pd.to_numeric(
+      work_df[weight_col], errors="coerce"
+  ).fillna(0)
+  proj_col = "project_no" if "project_no" in work_df.columns else work_df.columns[2]
 
   pivot = (
-      working_df.pivot_table(
-          index="Project No",
+      work_df.pivot_table(
+          index=proj_col,
           columns="Bucket",
-          values="Mark No",
-          aggfunc="count",
+          values=weight_col,
+          aggfunc="sum",
           fill_value=0,
       )
       .reset_index()
-      .rename(columns={"Project No": "ProjectNo"})
+      .rename(columns={proj_col: "ProjectNo"})
   )
 
-  # Ensure all columns exist
   expected_cols = [
       "ProjectNo",
       "0-7 Days",
@@ -274,40 +287,31 @@ def calculate_ageing_report(df, status_filter, date_col):
       "30-60 Days",
       ">60 Days",
   ]
-  for col in expected_cols:
-    if col not in pivot.columns:
-      pivot[col] = 0
+  for c in expected_cols:
+    if c not in pivot.columns:
+      pivot[c] = 0.0
 
-  return pivot[expected_cols]
+  bucket_cols = ["0-7 Days", "8-15 Days", "16-30 Days", "30-60 Days", ">60 Days"]
+  pivot["Total Weight"] = pivot[bucket_cols].sum(axis=1)
+  return pivot[["ProjectNo"] + bucket_cols + ["Total Weight"]]
+
 
 # --- TAB 3: WIP AGEING REPORT ---
 with tab3:
-  st.subheader("WIP Ageing Bucket Report")
+  st.subheader("WIP Ageing Bucket Report (Sum of Total Weight)")
   st.markdown(
-      "Calculated automatically based on **Today's Date - WIP Date** for items"
-      " with status **WIP**."
+      "Calculated based on **Today's Date - WIP Date** for items with status"
+      " **WIP**, summing up `DRAW TOTAL WT`."
   )
-
-  wip_report = calculate_ageing_report(
-      st.session_state.master_sheet, "WIP", "WIP Date"
-  )
-  if wip_report.empty:
-    st.info("No items currently in WIP status.")
-  else:
-    st.dataframe(wip_report, use_container_width=True)
+  wip_rep = calculate_weight_ageing_report(df_master, "WIP", "wip_date")
+  st.dataframe(wip_rep, use_container_width=True)
 
 # --- TAB 4: RFD AGEING REPORT ---
 with tab4:
-  st.subheader("RFD Ageing Bucket Report")
+  st.subheader("RFD Ageing Bucket Report (Sum of Total Weight)")
   st.markdown(
-      "Calculated automatically based on **Today's Date - RFD Date** for items"
-      " with status **RFD** (Ready for Dispatch)."
+      "Calculated based on **Today's Date - RFD Date** for items with status"
+      " **RFD**, summing up `DRAW TOTAL WT`."
   )
-
-  rfd_report = calculate_ageing_report(
-      st.session_state.master_sheet, "RFD", "RFD Date"
-  )
-  if rfd_report.empty:
-    st.info("No items currently in RFD status.")
-  else:
-    st.dataframe(rfd_report, use_container_width=True)
+  rfd_rep = calculate_weight_ageing_report(df_master, "RFD", "rfd_date")
+  st.dataframe(rfd_rep, use_container_width=True)
