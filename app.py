@@ -11,7 +11,7 @@ st.set_page_config(
 DB_FILE = "fabtech_server_data.db"
 
 
-# Initialize SQLite Server Database for Persistence
+# Initialize Server Database
 def init_db():
   conn = sqlite3.connect(DB_FILE)
   cursor = conn.cursor()
@@ -65,48 +65,30 @@ def load_data_from_db():
   df_orders = pd.read_sql("SELECT * FROM order_backlog", conn)
   conn.close()
 
-  # Seed default sample data if tables are empty
+  # Ensure Part Sl No is explicitly treated as string
+  if not df_master.empty and "part_sl_no" in df_master.columns:
+    df_master["part_sl_no"] = df_master["part_sl_no"].astype(str)
+
   if df_master.empty:
-    df_master = pd.DataFrame([
-        {
-            "sr_no": "1",
-            "unique_id": "201-CT-T1-MB-1",
-            "project_no": "201",
-            "description": "CT-T1",
-            "revision_no": "Rev-00",
-            "drawing_no": "024014-Q",
-            "element_type": "MAIN BEAM",
-            "mark_no": "MB-1",
-            "qty": 1,
-            "part_sl_no": "1/2",
-            "actual_wt": 2.268,
-            "draw_total_wt": 2.268,
-            "contractor": "MANOJ",
-            "status": "WIP",
-            "wip_date": "2026-02-25",
-            "rfd_date": "",
-            "dispatch_date": "",
-        },
-        {
-            "sr_no": "2",
-            "unique_id": "201-CT-T1-MB-2",
-            "project_no": "201",
-            "description": "CT-T1",
-            "revision_no": "Rev-00",
-            "drawing_no": "024014-Q",
-            "element_type": "MAIN BEAM",
-            "mark_no": "MB-2",
-            "qty": 1,
-            "part_sl_no": "2/2",
-            "actual_wt": 2.268,
-            "draw_total_wt": 2.268,
-            "contractor": "MANOJ",
-            "status": "RFD",
-            "wip_date": "2026-01-10",
-            "rfd_date": "2026-02-15",
-            "dispatch_date": "",
-        },
-    ])
+    df_master = pd.DataFrame([{
+        "sr_no": "1",
+        "unique_id": "201-CT-T1-MB-1",
+        "project_no": "201",
+        "description": "CT-T1",
+        "revision_no": "Rev-00",
+        "drawing_no": "024014-Q",
+        "element_type": "MAIN BEAM",
+        "mark_no": "MB-1",
+        "qty": 1,
+        "part_sl_no": "1/2",
+        "actual_wt": 2.268,
+        "draw_total_wt": 2.268,
+        "contractor": "MANOJ",
+        "status": "WIP",
+        "wip_date": "2026-02-25",
+        "rfd_date": "",
+        "dispatch_date": "",
+    }])
   if df_orders.empty:
     df_orders = pd.DataFrame([{
         "sl_no": "1",
@@ -126,6 +108,8 @@ def load_data_from_db():
 
 
 def save_master_to_db(df):
+  if "part_sl_no" in df.columns:
+    df["part_sl_no"] = df["part_sl_no"].astype(str)
   conn = sqlite3.connect(DB_FILE)
   df.to_sql("master_sheet", conn, if_exists="replace", index=False)
   conn.close()
@@ -141,8 +125,8 @@ df_master, df_orders = load_data_from_db()
 
 st.title("⚙️ FabTech Fabrication Project Management & Tracking Portal")
 st.markdown(
-    "Server-Persistent Master Data, Online Editing, and Weight-Summed Ageing"
-    " Buckets."
+    "Server-Persistent Master Data, Order Backlog Upload, and Weight-Summed"
+    " Ageing Reports."
 )
 
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -152,9 +136,33 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "4. RFD Ageing Report (Weight Sum)",
 ])
 
-# --- TAB 1: ORDER BACKLOG ---
+# --- TAB 1: ORDER BACKLOG & UPLOAD ---
 with tab1:
-  st.subheader("Order Backlog Management")
+  st.subheader("Order Backlog Management & Master Upload")
+  st.markdown(
+      "Upload your Order Backlog Excel/CSV file or edit online. Changes are"
+      " saved permanently to the server."
+  )
+
+  uploaded_order_file = st.file_uploader(
+      "Upload Order Backlog Excel/CSV", type=["xlsx", "csv"], key="order_upload"
+  )
+  if uploaded_order_file is not None:
+    try:
+      if uploaded_order_file.name.endswith(".csv"):
+        df_order_new = pd.read_csv(uploaded_order_file)
+      else:
+        df_order_new = pd.read_excel(uploaded_order_file)
+      df_order_new.columns = [
+          c.strip().lower().replace(" ", "_").replace(".", "")
+          for c in df_order_new.columns
+      ]
+      save_orders_to_db(df_order_new)
+      st.success("Order backlog uploaded and saved permanently to server!")
+      st.rerun()
+    except Exception as e:
+      st.error(f"Error processing order file: {e}")
+
   edited_orders = st.data_editor(
       df_orders, num_rows="dynamic", key="orders_editor"
   )
@@ -164,10 +172,12 @@ with tab1:
 
 # --- TAB 2: PROJECT MASTER SHEET ---
 with tab2:
-  st.subheader("Project Master Sheet (Server Persistent)")
+  st.subheader(
+      "Project Master Sheet (Server Persistent & Text Part Serial No)"
+  )
   st.markdown(
-      "Upload master sheets or edit online. Data is saved permanently on the"
-      " server."
+      "Upload your master template (Part Serial No handled strictly as text)"
+      " or edit online."
   )
 
   uploaded_file = st.file_uploader(
@@ -176,19 +186,22 @@ with tab2:
   if uploaded_file is not None:
     try:
       if uploaded_file.name.endswith(".csv"):
-        df_new = pd.read_csv(uploaded_file)
+        df_new = pd.read_csv(
+            uploaded_file, dtype={"Part Sl No": str, "part_sl_no": str}
+        )
       else:
-        df_new = pd.read_excel(uploaded_file)
+        # Read all columns as string first to protect Part Sl No text formatting (e.g. '1/2')
+        df_new = pd.read_excel(uploaded_file, dtype=str)
 
-      # Clean and standardize column names for the server database
       df_new.columns = [
           c.strip().lower().replace(" ", "_").replace(".", "")
           for c in df_new.columns
       ]
+      if "part_sl_no" in df_new.columns:
+        df_new["part_sl_no"] = df_new["part_sl_no"].astype(str)
+
       save_master_to_db(df_new)
-      st.success(
-          "Project master sheet uploaded and saved permanently to server!"
-      )
+      st.success("Project master sheet uploaded and saved permanently to server!")
       st.rerun()
     except Exception as e:
       st.error(f"Error processing uploaded file: {e}")
@@ -203,7 +216,7 @@ with tab2:
     )
 
 
-# --- HELPER: AGEING BUCKET CALCULATOR WITH WEIGHT SUM ---
+# --- HELPER: WEIGHT SUMMED AGEING REPORT ---
 def calculate_weight_ageing_report(
     df, status_val, date_col, weight_col="draw_total_wt"
 ):
@@ -256,11 +269,8 @@ def calculate_weight_ageing_report(
       return ">60 Days"
 
   work_df["Bucket"] = work_df["Age"].apply(get_bucket)
-
   if weight_col not in work_df.columns:
-    # Fallback to numeric column if weight column name differs
-    numeric_cols = work_df.select_dtypes(include=["number"]).columns
-    weight_col = numeric_cols[0] if len(numeric_cols) > 0 else work_df.columns[11]
+    weight_col = work_df.columns[11]
 
   work_df[weight_col] = pd.to_numeric(
       work_df[weight_col], errors="coerce"
