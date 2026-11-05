@@ -11,12 +11,34 @@ st.set_page_config(
 DB_FILE = "fabtech_server_data.db"
 
 
-# Initialize Server Database
+# Initialize Server Database (Active & Archive tables)
 def init_db():
   conn = sqlite3.connect(DB_FILE)
   cursor = conn.cursor()
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS master_sheet (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sr_no TEXT,
+            unique_id TEXT,
+            project_no TEXT,
+            description TEXT,
+            revision_no TEXT,
+            drawing_no TEXT,
+            element_type TEXT,
+            mark_no TEXT,
+            qty REAL,
+            part_sl_no TEXT,
+            actual_wt REAL,
+            draw_total_wt REAL,
+            contractor TEXT,
+            status TEXT,
+            wip_date TEXT,
+            rfd_date TEXT,
+            dispatch_date TEXT
+        )
+    """)
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS archive_master_sheet (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sr_no TEXT,
             unique_id TEXT,
@@ -65,16 +87,8 @@ def load_data_from_db():
   df_orders = pd.read_sql("SELECT * FROM order_backlog", conn)
   conn.close()
 
-  # Ensure Part Sl No is explicitly treated as string format
   if not df_master.empty and "part_sl_no" in df_master.columns:
     df_master["part_sl_no"] = df_master["part_sl_no"].astype(str)
-
-  # Round weights to 3 decimal places if present
-  for w_col in ["actual_wt", "draw_total_wt"]:
-    if not df_master.empty and w_col in df_master.columns:
-      df_master[w_col] = pd.to_numeric(
-          df_master[w_col], errors="coerce"
-      ).round(3)
 
   if df_master.empty:
     df_master = pd.DataFrame([{
@@ -90,7 +104,7 @@ def load_data_from_db():
         "part_sl_no": "1/2",
         "actual_wt": 2.268,
         "draw_total_wt": 2.268,
-        "contractor": "MANOJ",
+        "contractor": "Vendor_A",
         "status": "YTS",
         "wip_date": None,
         "rfd_date": None,
@@ -114,7 +128,6 @@ def load_data_from_db():
   return df_master, df_orders
 
 
-# Function to automatically calculate status based on dates entered
 def calculate_automatic_status(df):
   if df.empty:
     return df
@@ -130,11 +143,12 @@ def calculate_automatic_status(df):
         "nat",
         "",
         "NaT",
+        "nat",
     ]:
       return "DISP"
-    elif rfd and rfd.lower() not in ["nan", "none", "nat", "", "NaT"]:
+    elif rfd and rfd.lower() not in ["nan", "none", "nat", "", "NaT", "nat"]:
       return "RFD"
-    elif wip and wip.lower() not in ["nan", "none", "nat", "", "NaT"]:
+    elif wip and wip.lower() not in ["nan", "none", "nat", "", "NaT", "nat"]:
       return "WIP"
     else:
       return "YTS"
@@ -147,9 +161,6 @@ def calculate_automatic_status(df):
 def save_master_to_db(df):
   if "part_sl_no" in df.columns:
     df["part_sl_no"] = df["part_sl_no"].astype(str)
-  for w_col in ["actual_wt", "draw_total_wt"]:
-    if w_col in df.columns:
-      df[w_col] = pd.to_numeric(df[w_col], errors="coerce").round(3)
   df = calculate_automatic_status(df)
   conn = sqlite3.connect(DB_FILE)
   df.to_sql("master_sheet", conn, if_exists="replace", index=False)
@@ -162,114 +173,149 @@ def save_orders_to_db(df):
   conn.close()
 
 
+# --- AUTHENTICATION SYSTEM ---
+if "authenticated" not in st.session_state:
+  st.session_state.authenticated = False
+  st.session_state.username = ""
+  st.session_state.role = ""
+  st.session_state.vendor_name = ""
+
+if not st.session_state.authenticated:
+  st.title("🔐 FabTech Portal Login")
+  st.markdown("Please log in with your assigned vendor or admin credentials.")
+
+  with st.form("login_form"):
+    username_input = st.text_input("Username")
+    password_input = st.text_input("Password", type="password")
+    submit_btn = st.form_submit_button("Login")
+
+    if submit_btn:
+      users = {
+          "admin": {
+              "password": "AdminPassword123",
+              "role": "Admin",
+              "vendor": "",
+          },
+          "vendor_a": {
+              "password": "VendorA_Pass",
+              "role": "Vendor",
+              "vendor": "Vendor_A",
+          },
+          "vendor_b": {
+              "password": "VendorB_Pass",
+              "role": "Vendor",
+              "vendor": "Vendor_B",
+          },
+          "vendor_c": {
+              "password": "VendorC_Pass",
+              "role": "Vendor",
+              "vendor": "Vendor_C",
+          },
+      }
+
+      if (
+          username_input in users
+          and users[username_input]["password"] == password_input
+      ):
+        st.session_state.authenticated = True
+        st.session_state.username = username_input
+        st.session_state.role = users[username_input]["role"]
+        st.session_state.vendor_name = users[username_input]["vendor"]
+        st.success("Login successful!")
+        st.rerun()
+      else:
+        st.error("Invalid username or password.")
+  st.stop()
+
+# --- MAIN APP (AFTER SUCCESSFUL LOGIN) ---
 df_master, df_orders = load_data_from_db()
 
+st.sidebar.title(f"👤 Welcome, {st.session_state.username}")
+st.sidebar.markdown(f"**Role:** {st.session_state.role}")
+if st.session_state.role == "Vendor":
+  st.sidebar.markdown(f"**Assigned Vendor:** {st.session_state.vendor_name}")
+
+if st.sidebar.button("🚪 Logout"):
+  st.session_state.authenticated = False
+  st.rerun()
+
 st.title("⚙️ FabTech Fabrication Project Management & Tracking Portal")
-st.markdown(
-    "Server-Persistent Master Data, Auto-Status Calculation, Ageing Reports,"
-    " and Overall Status Pivot."
-)
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "1. Order Backlog",
-    "2. Project Master Sheet",
-    "3. WIP Ageing Report (Weight Sum)",
-    "4. RFD Ageing Report (Weight Sum)",
-    "5. Overall Project Status Pivot",
-])
+if st.session_state.role == "Admin":
+  tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+      "1. Order Backlog",
+      "2. Project Master Sheet",
+      "3. WIP Ageing Report",
+      "4. RFD Ageing Report",
+      "5. Overall Status Pivot",
+      "6. Archive Projects",
+  ])
+else:
+  tab2, tab3, tab4 = st.tabs([
+      "2. My Project Master Sheet",
+      "3. WIP Ageing Report",
+      "4. RFD Ageing Report",
+  ])
 
-# --- TAB 1: ORDER BACKLOG & UPLOAD ---
-with tab1:
-  st.subheader("Order Backlog Management & Master Upload")
-  uploaded_order_file = st.file_uploader(
-      "Upload Order Backlog Excel/CSV", type=["xlsx", "csv"], key="order_upload"
-  )
-  if uploaded_order_file is not None:
-    try:
-      if uploaded_order_file.name.endswith(".csv"):
-        df_order_new = pd.read_csv(uploaded_order_file)
-      else:
-        df_order_new = pd.read_excel(uploaded_order_file)
+# --- TAB 1: ORDER BACKLOG (Admin Only) ---
+if st.session_state.role == "Admin":
+  with tab1:
+    st.subheader("Order Backlog Management & Master Upload")
+    uploaded_order_file = st.file_uploader(
+        "Upload Order Backlog Excel/CSV", type=["xlsx", "csv"], key="order_upload"
+    )
+    if uploaded_order_file is not None:
+      df_order_new = pd.read_excel(uploaded_order_file)
       df_order_new.columns = [
           c.strip().lower().replace(" ", "_").replace(".", "")
           for c in df_order_new.columns
       ]
       save_orders_to_db(df_order_new)
-      st.success("Order backlog uploaded and saved permanently to server!")
+      st.success("Order backlog saved!")
       st.rerun()
-    except Exception as e:
-      st.error(f"Error processing order file: {e}")
 
-  if "end_delivery_date" in df_orders.columns:
-    df_orders["end_delivery_date"] = pd.to_datetime(
-        df_orders["end_delivery_date"].replace(
-            ["", "None", "none", "NaN", "nan", "NaT", "nat"], pd.NaT
-        ),
-        errors="coerce",
-    ).dt.date
-
-  order_column_configs = {}
-  if "end_delivery_date" in df_orders.columns:
-    order_column_configs["end_delivery_date"] = st.column_config.DateColumn(
-        label="End Delivery Date", format="YYYY-MM-DD"
+    edited_orders = st.data_editor(
+        df_orders, num_rows="dynamic", key="orders_editor"
     )
-
-  edited_orders = st.data_editor(
-      df_orders,
-      num_rows="dynamic",
-      key="orders_editor",
-      column_config=order_column_configs,
-  )
-  if st.button("💾 Save Order Backlog to Server"):
-    if "end_delivery_date" in edited_orders.columns:
-      edited_orders["end_delivery_date"] = pd.to_datetime(
-          edited_orders["end_delivery_date"], errors="coerce"
-      ).dt.strftime("%Y-%m-%d")
-      edited_orders["end_delivery_date"] = edited_orders[
-          "end_delivery_date"
-      ].fillna("")
-    save_orders_to_db(edited_orders)
-    st.success("Order backlog successfully saved to server database!")
-    st.rerun()
+    if st.button("💾 Save Order Backlog"):
+      save_orders_to_db(edited_orders)
+      st.success("Saved successfully!")
 
 # --- TAB 2: PROJECT MASTER SHEET ---
 with tab2:
-  st.subheader("Project Master Sheet (Auto-Status & Calendar Date Pickers)")
-  st.markdown(
-      "Upload master template or edit online. Status is calculated"
-      " automatically based on dates."
-  )
+  st.subheader("Project Master Sheet & Progress Updating")
+
+  if st.session_state.role == "Vendor":
+    st.markdown(
+        f"Showing data exclusively assigned to vendor:"
+        f" **{st.session_state.vendor_name}**"
+    )
+    editable_df = df_master[
+        df_master["contractor"].astype(str).str.strip().str.lower()
+        == st.session_state.vendor_name.lower()
+    ].copy()
+  else:
+    st.markdown("Admin View: Managing active projects and vendors.")
+    editable_df = df_master.copy()
 
   uploaded_file = st.file_uploader(
       "Upload Project Master Excel/CSV", type=["xlsx", "csv"], key="master_upload"
   )
-  if uploaded_file is not None:
-    try:
-      if uploaded_file.name.endswith(".csv"):
-        df_new = pd.read_csv(
-            uploaded_file, dtype={"Part Sl No": str, "part_sl_no": str}
-        )
-      else:
-        df_new = pd.read_excel(uploaded_file, dtype=str)
+  if uploaded_file is not None and st.session_state.role == "Admin":
+    df_new = pd.read_excel(uploaded_file, dtype=str)
+    df_new.columns = [
+        c.strip().lower().replace(" ", "_").replace(".", "")
+        for c in df_new.columns
+    ]
+    save_master_to_db(df_new)
+    st.success("Master sheet uploaded successfully!")
+    st.rerun()
 
-      df_new.columns = [
-          c.strip().lower().replace(" ", "_").replace(".", "")
-          for c in df_new.columns
-      ]
-      if "part_sl_no" in df_new.columns:
-        df_new["part_sl_no"] = df_new["part_sl_no"].astype(str)
-
-      save_master_to_db(df_new)
-      st.success("Project master sheet uploaded and saved permanently to server!")
-      st.rerun()
-    except Exception as e:
-      st.error(f"Error processing uploaded file: {e}")
-
-  df_master = calculate_automatic_status(df_master)
+  editable_df = calculate_automatic_status(editable_df)
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
-    if d_col in df_master.columns:
-      df_master[d_col] = pd.to_datetime(
-          df_master[d_col].replace(
+    if d_col in editable_df.columns:
+      editable_df[d_col] = pd.to_datetime(
+          editable_df[d_col].replace(
               ["", "None", "none", "NaN", "nan", "NaT", "nat"], pd.NaT
           ),
           errors="coerce",
@@ -277,24 +323,27 @@ with tab2:
 
   column_configurations = {}
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
-    if d_col in df_master.columns:
+    if d_col in editable_df.columns:
       column_configurations[d_col] = st.column_config.DateColumn(
           label=d_col.replace("_", " ").title(), format="YYYY-MM-DD"
       )
-
-  if "status" in df_master.columns:
+  if "status" in editable_df.columns:
     column_configurations["status"] = st.column_config.TextColumn(
         label="Status (Auto)", disabled=True
     )
+  if st.session_state.role == "Vendor":
+    column_configurations["contractor"] = st.column_config.TextColumn(
+        label="Contractor", disabled=True
+    )
 
   edited_master = st.data_editor(
-      df_master,
-      num_rows="dynamic",
+      editable_df,
+      num_rows="dynamic" if st.session_state.role == "Admin" else "fixed",
       key="master_editor",
       column_config=column_configurations,
   )
 
-  if st.button("💾 Save Master Sheet Changes to Server"):
+  if st.button("💾 Save My Updates to Server"):
     for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
       if d_col in edited_master.columns:
         edited_master[d_col] = pd.to_datetime(
@@ -302,49 +351,29 @@ with tab2:
         ).dt.strftime("%Y-%m-%d")
         edited_master[d_col] = edited_master[d_col].fillna("")
 
-    for w_col in ["actual_wt", "draw_total_wt"]:
-      if w_col in edited_master.columns:
-        edited_master[w_col] = pd.to_numeric(
-            edited_master[w_col], errors="coerce"
-        ).round(3)
-
     edited_master = calculate_automatic_status(edited_master)
-    save_master_to_db(edited_master)
-    st.success(
-        "Project master sheet successfully updated, auto-status calculated, and"
-        " saved to server!"
-    )
+
+    if st.session_state.role == "Vendor":
+      df_master.update(edited_master)
+      save_master_to_db(df_master)
+    else:
+      save_master_to_db(edited_master)
+
+    st.success("Changes successfully saved to server!")
     st.rerun()
 
 
-# --- HELPER: WEIGHT SUMMED AGEING REPORT WITH TOTAL ROW & STYLING ---
-def calculate_weight_ageing_report(
-    df, status_val, date_col, weight_col="draw_total_wt"
-):
-  empty_df = pd.DataFrame(
-      columns=[
-          "ProjectNo",
-          "0-7 Days",
-          "8-15 Days",
-          "16-30 Days",
-          "30-60 Days",
-          ">60 Days",
-          "Total Weight",
-      ]
-  )
+# --- HELPER: AGEING & PIVOT CALCULATIONS ---
+def calculate_weight_ageing_report(df, status_val, date_col):
   if df.empty or "status" not in df.columns:
-    return empty_df
-
+    return pd.DataFrame()
   work_df = df[df["status"].astype(str).str.upper() == status_val.upper()].copy()
   if work_df.empty:
-    return empty_df
+    return pd.DataFrame()
 
   today = pd.Timestamp.today().normalize()
-  if date_col in work_df.columns:
-    work_df[date_col] = pd.to_datetime(work_df[date_col], errors="coerce")
-    work_df["Age"] = (today - work_df[date_col]).dt.days
-  else:
-    work_df["Age"] = 0
+  work_df[date_col] = pd.to_datetime(work_df[date_col], errors="coerce")
+  work_df["Age"] = (today - work_df[date_col]).dt.days
 
   def get_bucket(age):
     if pd.isna(age) or age < 0:
@@ -361,9 +390,9 @@ def calculate_weight_ageing_report(
       return ">60 Days"
 
   work_df["Bucket"] = work_df["Age"].apply(get_bucket)
-  if weight_col not in work_df.columns:
-    weight_col = work_df.columns[11]
-
+  weight_col = (
+      "draw_total_wt" if "draw_total_wt" in work_df.columns else work_df.columns[11]
+  )
   work_df[weight_col] = pd.to_numeric(
       work_df[weight_col], errors="coerce"
   ).fillna(0)
@@ -380,7 +409,6 @@ def calculate_weight_ageing_report(
       .reset_index()
       .rename(columns={proj_col: "ProjectNo"})
   )
-
   expected_cols = [
       "ProjectNo",
       "0-7 Days",
@@ -392,192 +420,145 @@ def calculate_weight_ageing_report(
   for c in expected_cols:
     if c not in pivot.columns:
       pivot[c] = 0.0
-
   bucket_cols = ["0-7 Days", "8-15 Days", "16-30 Days", "30-60 Days", ">60 Days"]
   pivot["Total Weight"] = pivot[bucket_cols].sum(axis=1)
   final_df = pivot[["ProjectNo"] + bucket_cols + ["Total Weight"]]
 
-  numeric_cols = final_df.select_dtypes(include=["number"]).columns
-  final_df[numeric_cols] = final_df[numeric_cols].round(3)
-
   if not final_df.empty:
+    numeric_cols = final_df.select_dtypes(include=["number"]).columns
     total_row = {
-        col: round(final_df[col].sum(), 3)
-        if col in numeric_cols
-        else ("TOTAL" if col == "ProjectNo" else "")
+        col: final_df[col].sum() if col in numeric_cols else ""
         for col in final_df.columns
     }
+    total_row["ProjectNo"] = "TOTAL"
     final_df = pd.concat([final_df, pd.DataFrame([total_row])], ignore_index=True)
-
   return final_df
 
 
-def style_ageing_report(df):
-  if df.empty:
-    return df
-  styles = pd.DataFrame("", index=df.index, columns=df.columns)
-  if "Total Weight" in df.columns:
-    styles["Total Weight"] = "background-color: #e2f0d9; font-weight: bold;"
-
-  last_idx = df.index[-1]
-  if (
-      "ProjectNo" in df.columns
-      and str(df.loc[last_idx, "ProjectNo"]).strip().upper() == "TOTAL"
-  ):
-    styles.loc[last_idx, :] = "background-color: #fff2cc; font-weight: bold;"
-
-  return styles
-
-
-# --- TAB 3: WIP AGEING REPORT ---
-with tab3:
-  st.subheader("WIP Ageing Bucket Report (Sum of Total Weight & Totals)")
-  st.markdown(
-      "Calculated based on **Today's Date - WIP Date** for items with status"
-      " **WIP**, summing up `DRAW TOTAL WT` with summary totals at the bottom."
-  )
-  wip_rep = calculate_weight_ageing_report(df_master, "WIP", "wip_date")
-  if wip_rep.empty:
-    st.info("No data available for WIP ageing report.")
-  else:
-    numeric_cols = wip_rep.select_dtypes(include=["number"]).columns
-    styled_wip = (
-        wip_rep.style.apply(style_ageing_report, axis=None)
-        .format("{:.3f}", subset=numeric_cols)
-    )
-    st.dataframe(styled_wip, use_container_width=True)
-
-# --- TAB 4: RFD AGEING REPORT ---
-with tab4:
-  st.subheader("RFD Ageing Bucket Report (Sum of Total Weight & Totals)")
-  st.markdown(
-      "Calculated based on **Today's Date - RFD Date** for items with status"
-      " **RFD**, summing up `DRAW TOTAL WT` with summary totals at the bottom."
-  )
-  rfd_rep = calculate_weight_ageing_report(df_master, "RFD", "rfd_date")
-  if rfd_rep.empty:
-    st.info("No data available for RFD ageing report.")
-  else:
-    numeric_cols = rfd_rep.select_dtypes(include=["number"]).columns
-    styled_rfd = (
-        rfd_rep.style.apply(style_ageing_report, axis=None)
-        .format("{:.3f}", subset=numeric_cols)
-    )
-    st.dataframe(styled_rfd, use_container_width=True)
-
-
-# --- TAB 5: OVERALL PROJECT STATUS PIVOT ---
-with tab5:
-  st.subheader("Overall Project Status Summary Pivot")
-  st.markdown(
-      "Automatic pivot table summarizing total weight (`DRAW TOTAL WT`) by"
-      " Project Number, VLOOKUP Project Name (Customer Name) from Order Backlog,"
-      " and Status (`RFD`, `WIP`, `DISP`, `YTS`), with Grand Totals."
-  )
-
-
-  def calculate_overall_status_pivot(df_m, df_o, weight_col="draw_total_wt"):
-    if df_m.empty or "status" not in df_m.columns:
-      return pd.DataFrame(columns=["ProjectNo", "Project Name", "Grand Total"])
-
-    work_df = df_m.copy()
-    if weight_col not in work_df.columns:
-      weight_col = work_df.columns[11]
-
-    work_df[weight_col] = pd.to_numeric(
-        work_df[weight_col], errors="coerce"
-    ).fillna(0)
-    proj_col = (
-        "project_no" if "project_no" in work_df.columns else work_df.columns[2]
-    )
-
-    pivot = (
-        work_df.pivot_table(
-            index=proj_col,
-            columns="status",
-            values=weight_col,
-            aggfunc="sum",
-            fill_value=0,
-        )
-        .reset_index()
-        .rename(columns={proj_col: "ProjectNo"})
-    )
-
-    status_cols = [c for c in pivot.columns if c != "ProjectNo"]
-    pivot["Grand Total"] = pivot[status_cols].sum(axis=1)
-
-    # VLOOKUP Project Name / Customer Name from Order Backlog
-    if not df_o.empty:
-      job_col = (
-          "job_number"
-          if "job_number" in df_o.columns
-          else (df_o.columns[1] if len(df_o.columns) > 1 else None)
-      )
-      cust_col = (
-          "customer_name"
-          if "customer_name" in df_o.columns
-          else (df_o.columns[2] if len(df_o.columns) > 2 else None)
-      )
-
-      if job_col and cust_col:
-        mapping_dict = (
-            df_o.drop_duplicates(subset=[job_col])
-            .set_index(job_col)[cust_col]
-            .to_dict()
-        )
-        pivot["Project Name"] = (
-            pivot["ProjectNo"].astype(str).map(mapping_dict).fillna("N/A")
-        )
-      else:
-        pivot["Project Name"] = "N/A"
-    else:
-      pivot["Project Name"] = "N/A"
-
-    cols = ["ProjectNo", "Project Name"] + [
-        c for c in pivot.columns if c not in ["ProjectNo", "Project Name"]
+report_df = (
+    df_master
+    if st.session_state.role == "Admin"
+    else df_master[
+        df_master["contractor"].astype(str).str.strip().str.lower()
+        == st.session_state.vendor_name.lower()
     ]
-    pivot = pivot[cols]
+)
 
-    numeric_cols = pivot.select_dtypes(include=["number"]).columns
-    pivot[numeric_cols] = pivot[numeric_cols].round(3)
+with tab3:
+  st.subheader("WIP Ageing Report")
+  wip_rep = calculate_weight_ageing_report(report_df, "WIP", "wip_date")
+  st.dataframe(wip_rep, use_container_width=True)
 
-    if not pivot.empty:
-      total_row = {
-          col: round(pivot[col].sum(), 3)
-          if col in numeric_cols
-          else ("Grand Total" if col == "ProjectNo" else "")
-          for col in pivot.columns
-      }
-      pivot = pd.concat([pivot, pd.DataFrame([total_row])], ignore_index=True)
+with tab4:
+  st.subheader("RFD Ageing Report")
+  rfd_rep = calculate_weight_ageing_report(report_df, "RFD", "rfd_date")
+  st.dataframe(rfd_rep, use_container_width=True)
 
-    return pivot
-
-
-  def style_overall_pivot(df):
-    if df.empty:
-      return df
-    styles = pd.DataFrame("", index=df.index, columns=df.columns)
-
-    if "Grand Total" in df.columns:
-      styles["Grand Total"] = "background-color: #e2f0d9; font-weight: bold;"
-
-    last_idx = df.index[-1]
-    if (
-        "ProjectNo" in df.columns
-        and str(df.loc[last_idx, "ProjectNo"]).strip().upper() == "GRAND TOTAL"
-    ):
-      styles.loc[last_idx, :] = "background-color: #fff2cc; font-weight: bold;"
-
-    return styles
+if st.session_state.role == "Admin":
+  with tab5:
+    st.subheader("Overall Project Status Summary Pivot")
 
 
-  overall_pivot = calculate_overall_status_pivot(df_master, df_orders)
-  if overall_pivot.empty:
-    st.info("No data available for overall status pivot.")
-  else:
-    numeric_cols = overall_pivot.select_dtypes(include=["number"]).columns
-    styled_pivot = (
-        overall_pivot.style.apply(style_overall_pivot, axis=None)
-        .format("{:.3f}", subset=numeric_cols)
+    def calculate_overall_status_pivot(df):
+      if df.empty or "status" not in df.columns:
+        return pd.DataFrame()
+      work_df = df.copy()
+      weight_col = (
+          "draw_total_wt"
+          if "draw_total_wt" in work_df.columns
+          else work_df.columns[11]
+      )
+      work_df[weight_col] = pd.to_numeric(
+          work_df[weight_col], errors="coerce"
+      ).fillna(0)
+      proj_col = (
+          "project_no" if "project_no" in work_df.columns else work_df.columns[2]
+      )
+      pivot = (
+          work_df.pivot_table(
+              index=proj_col,
+              columns="status",
+              values=weight_col,
+              aggfunc="sum",
+              fill_value=0,
+          )
+          .reset_index()
+          .rename(columns={proj_col: "ProjectNo"})
+      )
+      status_cols = [c for c in pivot.columns if c != "ProjectNo"]
+      pivot["Grand Total"] = pivot[status_cols].sum(axis=1)
+      if not pivot.empty:
+        numeric_cols = pivot.select_dtypes(include=["number"]).columns
+        total_row = {
+            col: pivot[col].sum() if col in numeric_cols else ""
+            for col in pivot.columns
+        }
+        total_row["ProjectNo"] = "Grand Total"
+        pivot = pd.concat(
+            [pivot, pd.DataFrame([total_row])], ignore_index=True
+        )
+      return pivot
+
+
+    overall_pivot = calculate_overall_status_pivot(df_master)
+    st.dataframe(overall_pivot, use_container_width=True)
+
+  # --- TAB 6: ARCHIVE PROJECTS (Admin Only) ---
+  with tab6:
+    st.subheader("Project Archiving")
+    st.markdown(
+        "Archive finished projects to keep your active master sheet lean and"
+        " fast."
     )
-    st.dataframe(styled_pivot, use_container_width=True)
+
+    if not df_master.empty and "project_no" in df_master.columns:
+      active_projects = df_master["project_no"].dropna().unique().tolist()
+      selected_archive_proj = st.selectbox(
+          "Select Completed Project Number to Archive", options=active_projects
+      )
+
+      if st.button("📦 Archive Selected Project"):
+        conn = sqlite3.connect(DB_FILE)
+        # 1. Get rows for this project from master_sheet
+        df_to_archive = df_master[
+            df_master["project_no"].astype(str)
+            == str(selected_archive_proj)
+        ]
+
+        if not df_to_archive.empty:
+          # 2. Append to archive_master_sheet table
+          df_to_archive.to_sql(
+              "archive_master_sheet", conn, if_exists="append", index=False
+          )
+
+          # 3. Remove from active master_sheet table
+          df_active_remaining = df_master[
+              df_master["project_no"].astype(str)
+              != str(selected_archive_proj)
+          ]
+          df_active_remaining.to_sql(
+              "master_sheet", conn, if_exists="replace", index=False
+          )
+          conn.close()
+
+          st.success(
+              f"Project {selected_archive_proj} has been successfully"
+              " archived!"
+          )
+          st.rerun()
+        else:
+          conn.close()
+          st.warning("No records found for this project number.")
+    else:
+      st.info("No active projects found in master sheet.")
+
+    st.markdown("---")
+    st.subheader("View Archived Projects")
+    conn = sqlite3.connect(DB_FILE)
+    df_archive = pd.read_sql("SELECT * FROM archive_master_sheet", conn)
+    conn.close()
+
+    if df_archive.empty:
+      st.info("No archived projects found.")
+    else:
+      st.dataframe(df_archive, use_container_width=True)
