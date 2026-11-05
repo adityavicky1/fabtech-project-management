@@ -232,12 +232,12 @@ with tab1:
     st.success("Order backlog successfully saved to server database!")
     st.rerun()
 
-# --- TAB 2: PROJECT MASTER SHEET ---
+# --- TAB 2: PROJECT MASTER SHEET WITH DYNAMIC FILTERS ---
 with tab2:
-  st.subheader("Project Master Sheet (Auto-Status & Calendar Date Pickers)")
+  st.subheader("Project Master Sheet (Dynamic Filters & Calendar Date Pickers)")
   st.markdown(
-      "Upload master template or edit online. Status is calculated"
-      " automatically based on dates."
+      "Upload master template or dynamically filter and edit online. Status"
+      " is calculated automatically based on dates."
   )
 
   uploaded_file = st.file_uploader(
@@ -266,10 +266,57 @@ with tab2:
       st.error(f"Error processing uploaded file: {e}")
 
   df_master = calculate_automatic_status(df_master)
+
+  with st.expander(
+      "🔍 Advanced Dynamic Column Filters (Filter any column)", expanded=True
+  ):
+    all_columns = list(df_master.columns)
+    filter_column = st.selectbox(
+        "Select Column to Filter By",
+        options=["None"] + all_columns,
+        key="dynamic_filter_col",
+    )
+
+    filtered_master = df_master.copy()
+
+    if filter_column != "None":
+      unique_vals = sorted(
+          df_master[filter_column].dropna().astype(str).unique().tolist()
+      )
+      selected_vals = st.multiselect(
+          f"Select value(s) for '{filter_column}'", options=unique_vals
+      )
+
+      if selected_vals:
+        filtered_master = filtered_master[
+            filtered_master[filter_column].astype(str).isin(selected_vals)
+        ]
+
+      filter_column_2 = st.selectbox(
+          "Select Second Column to Filter By (Optional)",
+          options=["None"] + all_columns,
+          key="dynamic_filter_col_2",
+      )
+      if filter_column_2 != "None":
+        unique_vals_2 = sorted(
+            filtered_master[filter_column_2]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+        selected_vals_2 = st.multiselect(
+            f"Select value(s) for '{filter_column_2}'", options=unique_vals_2
+        )
+        if selected_vals_2:
+          filtered_master = filtered_master[
+              filtered_master[filter_column_2].astype(str).isin(selected_vals_2)
+          ]
+
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
-    if d_col in df_master.columns:
-      df_master[d_col] = pd.to_datetime(
-          df_master[d_col].replace(
+    if d_col in filtered_master.columns:
+      filtered_master[d_col] = pd.to_datetime(
+          filtered_master[d_col].replace(
               ["", "None", "none", "NaN", "nan", "NaT", "nat"], pd.NaT
           ),
           errors="coerce",
@@ -277,39 +324,52 @@ with tab2:
 
   column_configurations = {}
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
-    if d_col in df_master.columns:
+    if d_col in filtered_master.columns:
       column_configurations[d_col] = st.column_config.DateColumn(
           label=d_col.replace("_", " ").title(), format="YYYY-MM-DD"
       )
 
-  if "status" in df_master.columns:
+  if "status" in filtered_master.columns:
     column_configurations["status"] = st.column_config.TextColumn(
         label="Status (Auto)", disabled=True
     )
 
-  edited_master = st.data_editor(
-      df_master,
+  edited_filtered_master = st.data_editor(
+      filtered_master,
       num_rows="dynamic",
       key="master_editor",
       column_config=column_configurations,
   )
 
   if st.button("💾 Save Master Sheet Changes to Server"):
+    full_df = df_master.copy()
+    edited_indices = edited_filtered_master.index
+    for idx in edited_indices:
+      if idx in full_df.index:
+        for col in edited_filtered_master.columns:
+          full_df.loc[idx, col] = edited_filtered_master.loc[idx, col]
+
+    new_rows = edited_filtered_master.loc[
+        ~edited_filtered_master.index.isin(full_df.index)
+    ]
+    if not new_rows.empty:
+      full_df = pd.concat([full_df, new_rows], ignore_index=True)
+
     for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
-      if d_col in edited_master.columns:
-        edited_master[d_col] = pd.to_datetime(
-            edited_master[d_col], errors="coerce"
+      if d_col in full_df.columns:
+        full_df[d_col] = pd.to_datetime(
+            full_df[d_col], errors="coerce"
         ).dt.strftime("%Y-%m-%d")
-        edited_master[d_col] = edited_master[d_col].fillna("")
+        full_df[d_col] = full_df[d_col].fillna("")
 
     for w_col in ["actual_wt", "draw_total_wt"]:
-      if w_col in edited_master.columns:
-        edited_master[w_col] = pd.to_numeric(
-            edited_master[w_col], errors="coerce"
+      if w_col in full_df.columns:
+        full_df[w_col] = pd.to_numeric(
+            full_df[w_col], errors="coerce"
         ).round(3)
 
-    edited_master = calculate_automatic_status(edited_master)
-    save_master_to_db(edited_master)
+    full_df = calculate_automatic_status(full_df)
+    save_master_to_db(full_df)
     st.success(
         "Project master sheet successfully updated, auto-status calculated, and"
         " saved to server!"
@@ -317,27 +377,14 @@ with tab2:
     st.rerun()
 
 
-# --- HELPER: WEIGHT SUMMED AGEING REPORT WITH TOTAL ROW & STYLING ---
-def calculate_weight_ageing_report(
-    df, status_val, date_col, weight_col="draw_total_wt"
-):
-  empty_df = pd.DataFrame(
-      columns=[
-          "ProjectNo",
-          "0-7 Days",
-          "8-15 Days",
-          "16-30 Days",
-          "30-60 Days",
-          ">60 Days",
-          "Total Weight",
-      ]
-  )
+# --- HELPER: AGEING REPORT CALCULATION ---
+def get_ageing_detail_df(df, status_val, date_col, weight_col="draw_total_wt"):
   if df.empty or "status" not in df.columns:
-    return empty_df
+    return pd.DataFrame()
 
   work_df = df[df["status"].astype(str).str.upper() == status_val.upper()].copy()
   if work_df.empty:
-    return empty_df
+    return pd.DataFrame()
 
   today = pd.Timestamp.today().normalize()
   if date_col in work_df.columns:
@@ -409,7 +456,7 @@ def calculate_weight_ageing_report(
     }
     final_df = pd.concat([final_df, pd.DataFrame([total_row])], ignore_index=True)
 
-  return final_df
+  return work_df, final_df
 
 
 def style_ageing_report(df):
@@ -429,14 +476,15 @@ def style_ageing_report(df):
   return styles
 
 
-# --- TAB 3: WIP AGEING REPORT ---
+# --- TAB 3: WIP AGEING REPORT WITH DRILL-DOWN ---
 with tab3:
-  st.subheader("WIP Ageing Bucket Report (Sum of Total Weight & Totals)")
+  st.subheader("WIP Ageing Bucket Report & Mark-No Drill-Down")
   st.markdown(
       "Calculated based on **Today's Date - WIP Date** for items with status"
-      " **WIP**, summing up `DRAW TOTAL WT` with summary totals at the bottom."
+      " **WIP**, summing up `DRAW TOTAL WT`."
   )
-  wip_rep = calculate_weight_ageing_report(df_master, "WIP", "wip_date")
+
+  raw_wip_work_df, wip_rep = get_ageing_detail_df(df_master, "WIP", "wip_date")
   if wip_rep.empty:
     st.info("No data available for WIP ageing report.")
   else:
@@ -447,14 +495,36 @@ with tab3:
     )
     st.dataframe(styled_wip, use_container_width=True)
 
-# --- TAB 4: RFD AGEING REPORT ---
+    # --- DRILL DOWN SECTION FOR WIP ---
+    st.markdown("---")
+    st.markdown("### 🔍 Drill-Down: View Master Mark Numbers for WIP")
+    d_col1, d_col2 = st.columns(2)
+    with d_col1:
+      available_projs = sorted(raw_wip_work_df["project_no"].unique().tolist()) if not raw_wip_work_df.empty else []
+      sel_proj = st.selectbox("Select Project No for Drill-Down", options=available_projs, key="wip_drill_proj")
+    with d_col2:
+      sel_bucket = st.selectbox("Select Age Bucket", options=["0-7 Days", "8-15 Days", "16-30 Days", "30-60 Days", ">60 Days"], key="wip_drill_bucket")
+
+    if not raw_wip_work_df.empty:
+      drill_filtered = raw_wip_work_df[
+          (raw_wip_work_df["project_no"].astype(str) == str(sel_proj)) &
+          (raw_wip_work_df["Bucket"] == sel_bucket)
+      ]
+      st.markdown(f"**Showing Mark Number Details for Project {sel_proj} in bucket '{sel_bucket}':**")
+      if drill_filtered.empty:
+        st.info("No items found for the selected Project and Age Bucket combination.")
+      else:
+        st.dataframe(drill_filtered[["sr_no", "drawing_no", "element_type", "mark_no", "qty", "draw_total_wt", "contractor", "wip_date", "Age"]], use_container_width=True)
+
+# --- TAB 4: RFD AGEING REPORT WITH DRILL-DOWN ---
 with tab4:
-  st.subheader("RFD Ageing Bucket Report (Sum of Total Weight & Totals)")
+  st.subheader("RFD Ageing Bucket Report & Mark-No Drill-Down")
   st.markdown(
       "Calculated based on **Today's Date - RFD Date** for items with status"
-      " **RFD**, summing up `DRAW TOTAL WT` with summary totals at the bottom."
+      " **RFD**, summing up `DRAW TOTAL WT`."
   )
-  rfd_rep = calculate_weight_ageing_report(df_master, "RFD", "rfd_date")
+
+  raw_rfd_work_df, rfd_rep = get_ageing_detail_df(df_master, "RFD", "rfd_date")
   if rfd_rep.empty:
     st.info("No data available for RFD ageing report.")
   else:
@@ -465,20 +535,40 @@ with tab4:
     )
     st.dataframe(styled_rfd, use_container_width=True)
 
+    # --- DRILL DOWN SECTION FOR RFD ---
+    st.markdown("---")
+    st.markdown("### 🔍 Drill-Down: View Master Mark Numbers for RFD")
+    rd_col1, rd_col2 = st.columns(2)
+    with rd_col1:
+      available_rfd_projs = sorted(raw_rfd_work_df["project_no"].unique().tolist()) if not raw_rfd_work_df.empty else []
+      sel_rfd_proj = st.selectbox("Select Project No for Drill-Down", options=available_rfd_projs, key="rfd_drill_proj")
+    with rd_col2:
+      sel_rfd_bucket = st.selectbox("Select Age Bucket", options=["0-7 Days", "8-15 Days", "16-30 Days", "30-60 Days", ">60 Days"], key="rfd_drill_bucket")
 
-# --- TAB 5: OVERALL PROJECT STATUS PIVOT ---
+    if not raw_rfd_work_df.empty:
+      drill_rfd_filtered = raw_rfd_work_df[
+          (raw_rfd_work_df["project_no"].astype(str) == str(sel_rfd_proj)) &
+          (raw_rfd_work_df["Bucket"] == sel_rfd_bucket)
+      ]
+      st.markdown(f"**Showing Mark Number Details for Project {sel_rfd_proj} in bucket '{sel_rfd_bucket}':**")
+      if drill_rfd_filtered.empty:
+        st.info("No items found for the selected Project and Age Bucket combination.")
+      else:
+        st.dataframe(drill_rfd_filtered[["sr_no", "drawing_no", "element_type", "mark_no", "qty", "draw_total_wt", "contractor", "rfd_date", "Age"]], use_container_width=True)
+
+
+# --- TAB 5: OVERALL PROJECT STATUS PIVOT WITH DRILL-DOWN ---
 with tab5:
-  st.subheader("Overall Project Status Summary Pivot")
+  st.subheader("Overall Project Status Summary Pivot & Drill-Down")
   st.markdown(
       "Automatic pivot table summarizing total weight (`DRAW TOTAL WT`) by"
-      " Project Number, VLOOKUP Project Name (Customer Name) from Order Backlog,"
-      " and Status (`RFD`, `WIP`, `DISP`, `YTS`), with Grand Totals."
+      " Project Number, VLOOKUP Project Name, and Status."
   )
 
 
   def calculate_overall_status_pivot(df_m, df_o, weight_col="draw_total_wt"):
     if df_m.empty or "status" not in df_m.columns:
-      return pd.DataFrame(columns=["ProjectNo", "Project Name", "Grand Total"])
+      return df_m, pd.DataFrame(columns=["ProjectNo", "Project Name", "Grand Total"])
 
     work_df = df_m.copy()
     if weight_col not in work_df.columns:
@@ -506,7 +596,6 @@ with tab5:
     status_cols = [c for c in pivot.columns if c != "ProjectNo"]
     pivot["Grand Total"] = pivot[status_cols].sum(axis=1)
 
-    # VLOOKUP Project Name / Customer Name from Order Backlog
     if not df_o.empty:
       job_col = (
           "job_number"
@@ -550,7 +639,7 @@ with tab5:
       }
       pivot = pd.concat([pivot, pd.DataFrame([total_row])], ignore_index=True)
 
-    return pivot
+    return work_df, pivot
 
 
   def style_overall_pivot(df):
@@ -571,7 +660,7 @@ with tab5:
     return styles
 
 
-  overall_pivot = calculate_overall_status_pivot(df_master, df_orders)
+  raw_pivot_work, overall_pivot = calculate_overall_status_pivot(df_master, df_orders)
   if overall_pivot.empty:
     st.info("No data available for overall status pivot.")
   else:
@@ -581,3 +670,25 @@ with tab5:
         .format("{:.3f}", subset=numeric_cols)
     )
     st.dataframe(styled_pivot, use_container_width=True)
+
+    # --- DRILL DOWN SECTION FOR OVERALL STATUS ---
+    st.markdown("---")
+    st.markdown("### 🔍 Drill-Down: View Master Mark Numbers by Status")
+    p_col1, p_col2 = st.columns(2)
+    with p_col1:
+      available_p_nos = sorted(raw_pivot_work["project_no"].unique().tolist()) if not raw_pivot_work.empty else []
+      sel_p_no = st.selectbox("Select Project No", options=available_p_nos, key="pivot_drill_proj")
+    with p_col2:
+      available_statuses = sorted(raw_pivot_work["status"].unique().tolist()) if not raw_pivot_work.empty else []
+      sel_status = st.selectbox("Select Status", options=available_statuses, key="pivot_drill_status")
+
+    if not raw_pivot_work.empty:
+      drill_pivot_filtered = raw_pivot_work[
+          (raw_pivot_work["project_no"].astype(str) == str(sel_p_no)) &
+          (raw_pivot_work["status"].astype(str) == str(sel_status))
+      ]
+      st.markdown(f"**Showing Mark Number Details for Project {sel_p_no} with Status '{sel_status}':**")
+      if drill_pivot_filtered.empty:
+        st.info("No items found for the selected Project and Status combination.")
+      else:
+        st.dataframe(drill_pivot_filtered[["sr_no", "drawing_no", "element_type", "mark_no", "qty", "draw_total_wt", "contractor", "wip_date", "rfd_date", "dispatch_date"]], use_container_width=True)
