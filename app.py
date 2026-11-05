@@ -343,12 +343,19 @@ with tab2:
 
   if st.button("💾 Save Master Sheet Changes to Server"):
     full_df = df_master.copy()
-    existing_indices = edited_filtered_master.index.intersection(full_df.index)
-    new_rows = edited_filtered_master.drop(existing_indices, errors="ignore")
 
-    full_df.update(edited_filtered_master.loc[existing_indices])
-    if not new_rows.empty:
-      full_df = pd.concat([full_df, new_rows], ignore_index=True)
+    # Safely merge edited rows back into full_df index-by-index using standard object assignment
+    for idx, row in edited_filtered_master.iterrows():
+      if idx in full_df.index:
+        for col in edited_filtered_master.columns:
+          val = row[col]
+          if pd.isna(val):
+            full_df.loc[idx, col] = None
+          else:
+            full_df.loc[idx, col] = val
+      else:
+        new_row_df = pd.DataFrame([row])
+        full_df = pd.concat([full_df, new_row_df], ignore_index=True)
 
     for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
       if d_col in full_df.columns:
