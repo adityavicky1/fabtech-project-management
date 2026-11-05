@@ -65,6 +65,14 @@ def load_data_from_db():
   df_orders = pd.read_sql("SELECT * FROM order_backlog", conn)
   conn.close()
 
+  # Convert PyArrow string columns to standard object dtype to prevent assignment TypeErrors
+  for col in df_master.columns:
+    if pd.api.types.is_string_dtype(df_master[col]):
+      df_master[col] = df_master[col].astype(object)
+  for col in df_orders.columns:
+    if pd.api.types.is_string_dtype(df_orders[col]):
+      df_orders[col] = df_orders[col].astype(object)
+
   # Ensure Part Sl No is explicitly treated as string format
   if not df_master.empty and "part_sl_no" in df_master.columns:
     df_master["part_sl_no"] = df_master["part_sl_no"].astype(str)
@@ -344,7 +352,6 @@ with tab2:
   if st.button("💾 Save Master Sheet Changes to Server"):
     full_df = df_master.copy()
 
-    # Safely merge edited rows back into full_df index-by-index using standard object assignment
     for idx, row in edited_filtered_master.iterrows():
       if idx in full_df.index:
         for col in edited_filtered_master.columns:
