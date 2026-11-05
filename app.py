@@ -175,15 +175,16 @@ df_master, df_orders = load_data_from_db()
 st.title("⚙️ FabTech Fabrication Project Management & Tracking Portal")
 st.markdown(
     "Server-Persistent Master Data, Auto-Status Calculation, Ageing Reports,"
-    " and Overall Status Pivot."
+    " Overall Status Pivot, and Milestone Tracking."
 )
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "1. Order Backlog",
     "2. Project Master Sheet",
     "3. WIP Ageing Report (Weight Sum)",
     "4. RFD Ageing Report (Weight Sum)",
     "5. Overall Project Status Pivot",
+    "6. Milestone & Delivery Timeline",
 ])
 
 # --- TAB 1: ORDER BACKLOG & UPLOAD ---
@@ -807,3 +808,133 @@ with tab5:
           ]],
           use_container_width=True,
       )
+
+
+# --- TAB 6: MILESTONE & DELIVERY TIMELINE TRACKER ---
+with tab6:
+  st.subheader("📅 Milestone & Delivery Timeline Tracker")
+  st.markdown(
+      "Tracking Order Backlog target delivery dates against project status and"
+      " active execution."
+  )
+
+  if df_orders.empty:
+    st.info("No order backlog data available.")
+  else:
+    timeline_df = df_orders.copy()
+
+    # Calculate total weight and dispatched weight from master sheet per project/job number
+    if not df_master.empty and "project_no" in df_master.columns:
+      m_summary = (
+          df_master.groupby("project_no")
+          .agg(
+              total_wt=("draw_total_wt", "sum"),
+              disp_wt=(
+                  "draw_total_wt",
+                  lambda x: x[
+                      df_master.loc[x.index, "status"].astype(str).str.upper()
+                      == "DISP"
+                  ].sum(),
+              ),
+          )
+          .reset_index()
+      )
+    else:
+      m_summary = pd.DataFrame(
+          columns=["project_no", "total_wt", "disp_wt"]
+      )
+
+    # Identify job number column in orders
+    job_col = (
+        "job_number"
+        if "job_number" in timeline_df.columns
+        else (timeline_df.columns[1] if len(timeline_df.columns) > 1 else None)
+    )
+    date_col = (
+        "end_delivery_date"
+        if "end_delivery_date" in timeline_df.columns
+        else None
+    )
+
+    if job_col and date_col and not m_summary.empty:
+      m_summary["project_no"] = m_summary["project_no"].astype(str)
+      timeline_df[job_col] = timeline_df[job_col].astype(str)
+      timeline_df = timeline_df.merge(
+          m_summary, left_on=job_col, right_on="project_no", how="left"
+      )
+    else:
+      timeline_df["total_wt"] = 0.0
+      timeline_df["disp_wt"] = 0.0
+
+    today = pd.Timestamp.today().normalize()
+
+
+    def evaluate_milestone(row):
+      d_str = str(row.get(date_col, ""))
+      if not d_str or d_str.lower() in ["nan", "none", "nat", ""]:
+        return "No Date Set"
+      try:
+        d_val = pd.to_datetime(d_str).normalize()
+        disp = float(row.get("disp_wt", 0))
+        tot = float(row.get("total_wt", 0))
+
+        if tot > 0 and disp >= tot:
+          return "Completed"
+        elif d_val < today:
+          return "Overdue"
+        elif (d_val - today).days <= 30:
+          return "Due in 30 Days"
+        else:
+          return "On Track"
+      except Exception:
+        return "Invalid Date"
+
+
+    if date_col:
+      timeline_df["Milestone Status"] = timeline_df.apply(
+          evaluate_milestone, axis=1
+      )
+
+    # Filter widget for milestone status
+    status_filter = st.selectbox(
+        "Filter by Delivery Status",
+        options=[
+            "All",
+            "Overdue",
+            "Due in 30 Days",
+            "On Track",
+            "Completed",
+            "No Date Set",
+        ],
+    )
+    if status_filter != "All":
+      timeline_df = timeline_df[
+          timeline_df["Milestone Status"] == status_filter
+      ]
+
+
+    def style_timeline(df):
+      if df.empty or "Milestone Status" not in df.columns:
+        return df
+      styles = pd.DataFrame("", index=df.index, columns=df.columns)
+
+      for idx, val in df["Milestone Status"].items():
+        if val == "Overdue":
+          styles.loc[idx, "Milestone Status"] = (
+              "background-color: #f8cecc; font-weight: bold; color: #a94442;"
+          )
+        elif val == "Due in 30 Days":
+          styles.loc[idx, "Milestone Status"] = (
+              "background-color: #fff2cc; font-weight: bold; color: #8a6d3b;"
+          )
+        elif val == "Completed":
+          styles.loc[idx, "Milestone Status"] = (
+              "background-color: #e2f0d9; font-weight: bold; color: #3c763d;"
+          )
+      return styles
+
+
+    st.dataframe(
+        timeline_df.style.apply(style_timeline, axis=None),
+        use_container_width=True,
+    )
