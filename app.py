@@ -8,6 +8,22 @@ st.set_page_config(
     page_title="FabTech Project Management System", layout="wide"
 )
 
+# --- CUSTOM BACKGROUND & UI STYLING ---
+st.markdown(
+    """
+    <style>
+    /* Main App Background */
+    .stApp {
+        background-color: #f4f6f9;
+    }
+    h1, h2, h3 {
+        color: #1f3a60;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 DB_FILE = "fabtech_server_data.db"
 
 
@@ -65,7 +81,6 @@ def load_data_from_db():
   df_orders = pd.read_sql("SELECT * FROM order_backlog", conn)
   conn.close()
 
-  # Convert PyArrow string columns to standard object dtype to prevent assignment TypeErrors
   for col in df_master.columns:
     if pd.api.types.is_string_dtype(df_master[col]):
       df_master[col] = df_master[col].astype(object)
@@ -73,11 +88,9 @@ def load_data_from_db():
     if pd.api.types.is_string_dtype(df_orders[col]):
       df_orders[col] = df_orders[col].astype(object)
 
-  # Ensure Part Sl No is explicitly treated as string format
   if not df_master.empty and "part_sl_no" in df_master.columns:
     df_master["part_sl_no"] = df_master["part_sl_no"].astype(str)
 
-  # Round weights to 3 decimal places if present
   for w_col in ["actual_wt", "draw_total_wt"]:
     if not df_master.empty and w_col in df_master.columns:
       df_master[w_col] = pd.to_numeric(
@@ -122,7 +135,6 @@ def load_data_from_db():
   return df_master, df_orders
 
 
-# Function to automatically calculate status based on dates entered
 def calculate_automatic_status(df):
   if df.empty:
     return df
@@ -171,12 +183,77 @@ def save_orders_to_db(df):
 
 
 df_master, df_orders = load_data_from_db()
+df_master = calculate_automatic_status(df_master)
 
 st.title("⚙️ FabTech Fabrication Project Management & Tracking Portal")
 st.markdown(
     "Server-Persistent Master Data, Auto-Status Calculation, Ageing Reports,"
     " Overall Status Pivot, and Milestone Tracking."
 )
+
+# --- TOP-LINE KPI SUMMARY CARDS (METRICS BANNER) ---
+st.markdown("### 📊 Executive KPI Summary")
+kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+
+total_tonnage = (
+    round(df_master["draw_total_wt"].sum(), 3)
+    if not df_master.empty and "draw_total_wt" in df_master.columns
+    else 0.0
+)
+disp_mask = (
+    df_master["status"].astype(str).str.upper() == "DISP"
+    if not df_master.empty and "status" in df_master.columns
+    else pd.Series([False])
+)
+dispatched_tonnage = (
+    round(df_master.loc[disp_mask, "draw_total_wt"].sum(), 3)
+    if not df_master.empty and "draw_total_wt" in df_master.columns
+    else 0.0
+)
+completion_pct = (
+    round((dispatched_tonnage / total_tonnage) * 100, 1)
+    if total_tonnage > 0
+    else 0.0
+)
+
+# Calculate items stuck in >60 days across WIP/RFD
+today = pd.Timestamp.today().normalize()
+
+
+def count_critical_backlog(df):
+  if df.empty or "wip_date" not in df.columns:
+    return 0
+  temp = df.copy()
+  temp["wip_date"] = pd.to_datetime(temp["wip_date"], errors="coerce")
+  temp["Age"] = (today - temp["wip_date"]).dt.days
+  return len(temp[(temp["status"].isin(["WIP", "RFD"])) & (temp["Age"] > 60)])
+
+
+critical_items_count = count_critical_backlog(df_master)
+
+kpi1.metric(
+    label="Total Master Tonnage",
+    value=f"{total_tonnage:,.3f} MT",
+    delta="Active Scope",
+)
+kpi2.metric(
+    label="Dispatched Tonnage",
+    value=f"{dispatched_tonnage:,.3f} MT",
+    delta=f"{completion_pct}% Done",
+)
+kpi3.metric(
+    label="Active Orders Count",
+    value=str(len(df_orders)) if not df_orders.empty else "0",
+    delta="Backlog",
+)
+kpi4.metric(
+    label="Critical (>60 Days Stalled)",
+    value=str(critical_items_count),
+    delta="Needs Attention" if critical_items_count > 0 else "All Clear",
+    delta_color="inverse" if critical_items_count > 0 else "normal",
+)
+
+st.markdown("---")
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "1. Order Backlog",
@@ -273,8 +350,6 @@ with tab2:
       st.rerun()
     except Exception as e:
       st.error(f"Error processing uploaded file: {e}")
-
-  df_master = calculate_automatic_status(df_master)
 
   with st.expander(
       "🔍 Advanced Dynamic Column Filters (Filter any column)", expanded=True
@@ -407,7 +482,6 @@ def get_ageing_detail_df(df, status_val, date_col, weight_col="draw_total_wt"):
   if work_df.empty:
     return pd.DataFrame(), empty_rep
 
-  today = pd.Timestamp.today().normalize()
   if date_col in work_df.columns:
     work_df[date_col] = pd.to_datetime(work_df[date_col], errors="coerce")
     work_df["Age"] = (today - work_df[date_col]).dt.days
@@ -823,7 +897,6 @@ with tab6:
   else:
     timeline_df = df_orders.copy()
 
-    # Calculate total weight and dispatched weight from master sheet per project/job number
     if not df_master.empty and "project_no" in df_master.columns:
       m_summary = (
           df_master.groupby("project_no")
@@ -844,7 +917,6 @@ with tab6:
           columns=["project_no", "total_wt", "disp_wt"]
       )
 
-    # Identify job number column in orders
     job_col = (
         "job_number"
         if "job_number" in timeline_df.columns
@@ -865,8 +937,6 @@ with tab6:
     else:
       timeline_df["total_wt"] = 0.0
       timeline_df["disp_wt"] = 0.0
-
-    today = pd.Timestamp.today().normalize()
 
 
     def evaluate_milestone(row):
@@ -895,7 +965,6 @@ with tab6:
           evaluate_milestone, axis=1
       )
 
-    # Filter widget for milestone status
     status_filter = st.selectbox(
         "Filter by Delivery Status",
         options=[
