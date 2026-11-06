@@ -8,3 +8,5 @@ easyocr>=1.7.0
 numpy>=1.20.0
 google-genai
 xlrd
+plotly
+xlsxwriter
