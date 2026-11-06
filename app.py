@@ -192,12 +192,12 @@ st.markdown(
     " One-Click Exports."
 )
 
-# --- TOP-LINE KPI SUMMARY CARDS ---
+# --- TOP-LINE KPI SUMMARY CARDS (WHOLE NUMBERS) ---
 st.markdown("### 📊 Executive KPI Summary")
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 
-total_tonnage = (
-    round(df_master["draw_total_wt"].sum(), 3)
+total_tonnage_raw = (
+    df_master["draw_total_wt"].sum()
     if not df_master.empty and "draw_total_wt" in df_master.columns
     else 0.0
 )
@@ -206,14 +206,18 @@ disp_mask = (
     if not df_master.empty and "status" in df_master.columns
     else pd.Series([False])
 )
-dispatched_tonnage = (
-    round(df_master.loc[disp_mask, "draw_total_wt"].sum(), 3)
+dispatched_tonnage_raw = (
+    df_master.loc[disp_mask, "draw_total_wt"].sum()
     if not df_master.empty and "draw_total_wt" in df_master.columns
     else 0.0
 )
+
+# Rounded to whole numbers for KPI metrics
+total_tonnage_int = int(round(total_tonnage_raw))
+dispatched_tonnage_int = int(round(dispatched_tonnage_raw))
 completion_pct = (
-    round((dispatched_tonnage / total_tonnage) * 100, 1)
-    if total_tonnage > 0
+    round((dispatched_tonnage_raw / total_tonnage_raw) * 100, 1)
+    if total_tonnage_raw > 0
     else 0.0
 )
 
@@ -233,13 +237,13 @@ critical_items_count = count_critical_backlog(df_master)
 
 kpi1.metric(
     label="Total Master Tonnage",
-    value=f"{total_tonnage:,.3f} MT",
+    value=f"{total_tonnage_int:,} MT",
     delta="Active Scope",
 )
 kpi2.metric(
     label="Dispatched Tonnage",
-    value=f"{dispatched_tonnage:,.3f} MT",
-    delta=f"{completion_pct}% Done",
+    value=f"{dispatched_tonnage_int:,} MT",
+    delta=f"{int(round(completion_pct))}% Done",
 )
 kpi3.metric(
     label="Active Orders Count",
@@ -985,7 +989,6 @@ with tab6:
       timeline_df["rfd_wt"] = 0.0
       timeline_df["wip_wt"] = 0.0
 
-    # Ensure numeric columns are rounded to 3 decimal places
     for wt_col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt", "po_rate"]:
       if wt_col in timeline_df.columns:
         timeline_df[wt_col] = pd.to_numeric(
@@ -1055,7 +1058,6 @@ with tab6:
       return styles
 
 
-    # Column configs for 3 decimals on weights and INR for rate
     timeline_configs = {}
     for col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt"]:
       if col in timeline_df.columns:
