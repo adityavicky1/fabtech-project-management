@@ -1,7 +1,9 @@
 import datetime
+import io
 import os
 import sqlite3
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 st.set_page_config(
@@ -12,7 +14,6 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* Main App Background */
     .stApp {
         background-color: #f4f6f9;
     }
@@ -187,11 +188,11 @@ df_master = calculate_automatic_status(df_master)
 
 st.title("⚙️ FabTech Fabrication Project Management & Tracking Portal")
 st.markdown(
-    "Server-Persistent Master Data, Auto-Status Calculation, Ageing Reports,"
-    " Overall Status Pivot, and Milestone Tracking."
+    "Server-Persistent Master Data, Visual Analytics, Contractor Tracker, and"
+    " One-Click Exports."
 )
 
-# --- TOP-LINE KPI SUMMARY CARDS (METRICS BANNER) ---
+# --- TOP-LINE KPI SUMMARY CARDS ---
 st.markdown("### 📊 Executive KPI Summary")
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 
@@ -216,7 +217,6 @@ completion_pct = (
     else 0.0
 )
 
-# Calculate items stuck in >60 days across WIP/RFD
 today = pd.Timestamp.today().normalize()
 
 
@@ -255,13 +255,15 @@ kpi4.metric(
 
 st.markdown("---")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "1. Order Backlog",
     "2. Project Master Sheet",
-    "3. WIP Ageing Report (Weight Sum)",
-    "4. RFD Ageing Report (Weight Sum)",
-    "5. Overall Project Status Pivot",
-    "6. Milestone & Delivery Timeline",
+    "3. WIP Ageing Report",
+    "4. RFD Ageing Report",
+    "5. Overall Status Pivot",
+    "6. Milestone Tracker",
+    "7. Contractor Performance",
+    "8. Visual Analytics & Charts",
 ])
 
 # --- TAB 1: ORDER BACKLOG & UPLOAD ---
@@ -318,12 +320,10 @@ with tab1:
     st.success("Order backlog successfully saved to server database!")
     st.rerun()
 
-# --- TAB 2: PROJECT MASTER SHEET WITH DYNAMIC FILTERS ---
+# --- TAB 2: PROJECT MASTER SHEET WITH DYNAMIC FILTERS & EXPORT ---
 with tab2:
-  st.subheader("Project Master Sheet (Dynamic Filters & Calendar Date Pickers)")
-  st.markdown(
-      "Upload master template or dynamically filter and edit online. Status"
-      " is calculated automatically based on dates."
+  st.subheader(
+      "Project Master Sheet (Dynamic Filters, Editing & Excel Export)"
   )
 
   uploaded_file = st.file_uploader(
@@ -396,6 +396,21 @@ with tab2:
           filtered_master = filtered_master[
               filtered_master[filter_column_2].astype(str).isin(selected_vals_2)
           ]
+
+  # --- ONE-CLICK EXCEL EXPORT BUTTON ---
+  output = io.BytesIO()
+  with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+    filtered_master.to_excel(writer, index=False, sheet_name="ProjectMaster")
+  excel_data = output.getvalue()
+
+  st.download_button(
+      label="📥 Download Filtered Master Sheet as Excel (.xlsx)",
+      data=excel_data,
+      file_name="FabTech_Project_Master.xlsx",
+      mime=(
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      ),
+  )
 
   for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
     if d_col in filtered_master.columns:
@@ -571,18 +586,26 @@ def style_ageing_report(df):
   return styles
 
 
-# --- TAB 3: WIP AGEING REPORT WITH DRILL-DOWN ---
+# --- TAB 3: WIP AGEING REPORT WITH EXCEL EXPORT & DRILL-DOWN ---
 with tab3:
-  st.subheader("WIP Ageing Bucket Report & Mark-No Drill-Down")
-  st.markdown(
-      "Calculated based on **Today's Date - WIP Date** for items with status"
-      " **WIP**, summing up `DRAW TOTAL WT`."
-  )
-
+  st.subheader("WIP Ageing Bucket Report & Excel Export")
   raw_wip_work_df, wip_rep = get_ageing_detail_df(df_master, "WIP", "wip_date")
   if wip_rep.empty or raw_wip_work_df.empty:
     st.info("No data available for WIP ageing report.")
   else:
+    # Excel Export for WIP Ageing
+    output_wip = io.BytesIO()
+    with pd.ExcelWriter(output_wip, engine="xlsxwriter") as writer:
+      wip_rep.to_excel(writer, index=False, sheet_name="WIP_Ageing")
+    st.download_button(
+        label="📥 Download WIP Ageing Report (.xlsx)",
+        data=output_wip.getvalue(),
+        file_name="WIP_Ageing_Report.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+    )
+
     numeric_cols = wip_rep.select_dtypes(include=["number"]).columns
     styled_wip = (
         wip_rep.style.apply(style_ageing_report, axis=None)
@@ -619,10 +642,6 @@ with tab3:
         (raw_wip_work_df["project_no"].astype(str) == str(sel_proj))
         & (raw_wip_work_df["Bucket"] == sel_bucket)
     ]
-    st.markdown(
-        f"**Showing Mark Number Details for Project {sel_proj} in bucket"
-        f" '{sel_bucket}':**"
-    )
     if drill_filtered.empty:
       st.info(
           "No items found for the selected Project and Age Bucket combination."
@@ -643,18 +662,25 @@ with tab3:
           use_container_width=True,
       )
 
-# --- TAB 4: RFD AGEING REPORT WITH DRILL-DOWN ---
+# --- TAB 4: RFD AGEING REPORT WITH EXCEL EXPORT & DRILL-DOWN ---
 with tab4:
-  st.subheader("RFD Ageing Bucket Report & Mark-No Drill-Down")
-  st.markdown(
-      "Calculated based on **Today's Date - RFD Date** for items with status"
-      " **RFD**, summing up `DRAW TOTAL WT`."
-  )
-
+  st.subheader("RFD Ageing Bucket Report & Excel Export")
   raw_rfd_work_df, rfd_rep = get_ageing_detail_df(df_master, "RFD", "rfd_date")
   if rfd_rep.empty or raw_rfd_work_df.empty:
     st.info("No data available for RFD ageing report.")
   else:
+    output_rfd = io.BytesIO()
+    with pd.ExcelWriter(output_rfd, engine="xlsxwriter") as writer:
+      rfd_rep.to_excel(writer, index=False, sheet_name="RFD_Ageing")
+    st.download_button(
+        label="📥 Download RFD Ageing Report (.xlsx)",
+        data=output_rfd.getvalue(),
+        file_name="RFD_Ageing_Report.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+    )
+
     numeric_cols = rfd_rep.select_dtypes(include=["number"]).columns
     styled_rfd = (
         rfd_rep.style.apply(style_ageing_report, axis=None)
@@ -691,10 +717,6 @@ with tab4:
         (raw_rfd_work_df["project_no"].astype(str) == str(sel_rfd_proj))
         & (raw_rfd_work_df["Bucket"] == sel_rfd_bucket)
     ]
-    st.markdown(
-        f"**Showing Mark Number Details for Project {sel_rfd_proj} in bucket"
-        f" '{sel_rfd_bucket}':**"
-    )
     if drill_rfd_filtered.empty:
       st.info(
           "No items found for the selected Project and Age Bucket combination."
@@ -718,11 +740,7 @@ with tab4:
 
 # --- TAB 5: OVERALL PROJECT STATUS PIVOT WITH DRILL-DOWN ---
 with tab5:
-  st.subheader("Overall Project Status Summary Pivot & Drill-Down")
-  st.markdown(
-      "Automatic pivot table summarizing total weight (`DRAW TOTAL WT`) by"
-      " Project Number, VLOOKUP Project Name, and Status."
-  )
+  st.subheader("Overall Project Status Summary Pivot & Excel Export")
 
 
   def calculate_overall_status_pivot(df_m, df_o, weight_col="draw_total_wt"):
@@ -827,6 +845,18 @@ with tab5:
   if overall_pivot.empty or raw_pivot_work.empty:
     st.info("No data available for overall status pivot.")
   else:
+    output_pivot = io.BytesIO()
+    with pd.ExcelWriter(output_pivot, engine="xlsxwriter") as writer:
+      overall_pivot.to_excel(writer, index=False, sheet_name="StatusPivot")
+    st.download_button(
+        label="📥 Download Status Pivot Report (.xlsx)",
+        data=output_pivot.getvalue(),
+        file_name="Overall_Status_Pivot.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+    )
+
     numeric_cols = overall_pivot.select_dtypes(include=["number"]).columns
     styled_pivot = (
         overall_pivot.style.apply(style_overall_pivot, axis=None)
@@ -858,10 +888,6 @@ with tab5:
         (raw_pivot_work["project_no"].astype(str) == str(sel_p_no))
         & (raw_pivot_work["status"].astype(str) == str(sel_status))
     ]
-    st.markdown(
-        f"**Showing Mark Number Details for Project {sel_p_no} with Status"
-        f" '{sel_status}':**"
-    )
     if drill_pivot_filtered.empty:
       st.info(
           "No items found for the selected Project and Status combination."
@@ -884,19 +910,13 @@ with tab5:
       )
 
 
-# --- TAB 6: MILESTONE & DELIVERY TIMELINE TRACKER ---
+# --- TAB 6: MILESTONE TRACKER ---
 with tab6:
   st.subheader("📅 Milestone & Delivery Timeline Tracker")
-  st.markdown(
-      "Tracking Order Backlog target delivery dates against project status and"
-      " active execution."
-  )
-
   if df_orders.empty:
     st.info("No order backlog data available.")
   else:
     timeline_df = df_orders.copy()
-
     if not df_master.empty and "project_no" in df_master.columns:
       m_summary = (
           df_master.groupby("project_no")
@@ -947,7 +967,6 @@ with tab6:
         d_val = pd.to_datetime(d_str).normalize()
         disp = float(row.get("disp_wt", 0))
         tot = float(row.get("total_wt", 0))
-
         if tot > 0 and disp >= tot:
           return "Completed"
         elif d_val < today:
@@ -986,7 +1005,6 @@ with tab6:
       if df.empty or "Milestone Status" not in df.columns:
         return df
       styles = pd.DataFrame("", index=df.index, columns=df.columns)
-
       for idx, val in df["Milestone Status"].items():
         if val == "Overdue":
           styles.loc[idx, "Milestone Status"] = (
@@ -1007,3 +1025,115 @@ with tab6:
         timeline_df.style.apply(style_timeline, axis=None),
         use_container_width=True,
     )
+
+
+# --- TAB 7: CONTRACTOR PERFORMANCE TRACKER ---
+with tab7:
+  st.subheader("👷 Contractor Performance & Shop-Floor Productivity")
+  st.markdown(
+      "Analyzing total executed tonnage, output status, and workload distribution"
+      " by contractor."
+  )
+
+  if df_master.empty or "contractor" not in df_master.columns:
+    st.info("No contractor data available in master sheet.")
+  else:
+    c_df = df_master.copy()
+    c_df["contractor"] = c_df["contractor"].fillna("Unassigned").astype(str)
+    c_df["draw_total_wt"] = pd.to_numeric(
+        c_df["draw_total_wt"], errors="coerce"
+    ).fillna(0)
+
+    contractor_summary = (
+        c_df.groupby("contractor")
+        .agg(
+            Total_Items=("mark_no", "count"),
+            Total_Weight=("draw_total_wt", "sum"),
+            Dispatched_Weight=(
+                "draw_total_wt",
+                lambda x: x[
+                    c_df.loc[x.index, "status"].astype(str).str.upper()
+                    == "DISP"
+                ].sum(),
+            ),
+            Active_WIP_Weight=(
+                "draw_total_wt",
+                lambda x: x[
+                    c_df.loc[x.index, "status"].astype(str).str.upper() == "WIP"
+                ].sum(),
+            ),
+        )
+        .reset_index()
+    )
+
+    contractor_summary["Total_Weight"] = contractor_summary[
+        "Total_Weight"
+    ].round(3)
+    contractor_summary["Dispatched_Weight"] = contractor_summary[
+        "Dispatched_Weight"
+    ].round(3)
+    contractor_summary["Active_WIP_Weight"] = contractor_summary[
+        "Active_WIP_Weight"
+    ].round(3)
+
+    st.dataframe(contractor_summary, use_container_width=True)
+
+    # Bar chart for contractor productivity
+    fig_contractor = px.bar(
+        contractor_summary,
+        x="contractor",
+        y=["Dispatched_Weight", "Active_WIP_Weight"],
+        title="Tonnage Output by Contractor",
+        labels={
+            "value": "Weight (MT)",
+            "contractor": "Contractor Name",
+            "variable": "Status Category",
+        },
+        barmode="group",
+    )
+    st.plotly_chart(fig_contractor, use_container_width=True)
+
+
+# --- TAB 8: VISUAL ANALYTICS & CHARTS ---
+with tab8:
+  st.subheader("📈 Visual Analytics & Shop-Floor Charts (Plotly)")
+
+  if df_master.empty:
+    st.info("No data available for charts.")
+  else:
+    c1, c2 = st.columns(2)
+
+    with c1:
+      # Status breakdown pie chart
+      status_counts = (
+          df_master.groupby("status")["draw_total_wt"].sum().reset_index()
+      )
+      fig_pie = px.pie(
+          status_counts,
+          names="status",
+          values="draw_total_wt",
+          title="Total Weight Distribution by Status (MT)",
+          hole=0.4,
+      )
+      st.plotly_chart(fig_pie, use_container_width=True)
+
+    with c2:
+      # Project tonnage comparison bar chart
+      proj_counts = (
+          df_master.groupby("project_no")["draw_total_wt"]
+          .sum()
+          .reset_index()
+      )
+      fig_bar = px.bar(
+          proj_counts,
+          x="project_no",
+          y="draw_total_wt",
+          title="Total Master Tonnage per Project No (MT)",
+          labels={
+              "project_no": "Project Number",
+              "draw_total_wt": "Weight (MT)",
+          },
+          color="draw_total_wt",
+          color_continuous_scale="Blues",
+      )
+      st.plotly_chart(fig_bar, use_container_width=True)
