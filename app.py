@@ -130,7 +130,7 @@ def load_data_from_db():
         "po_number": "2002323",
         "po_line_item": "10",
         "po_qty": 1000,
-        "po_rate": 105000,
+        "po_rate": 105000.0,
         "end_delivery_date": "2027-12-31",
     }])
   return df_master, df_orders
@@ -296,10 +296,19 @@ with tab1:
         errors="coerce",
     ).dt.date
 
+  if "po_rate" in df_orders.columns:
+    df_orders["po_rate"] = pd.to_numeric(
+        df_orders["po_rate"], errors="coerce"
+    ).round(2)
+
   order_column_configs = {}
   if "end_delivery_date" in df_orders.columns:
     order_column_configs["end_delivery_date"] = st.column_config.DateColumn(
         label="End Delivery Date", format="YYYY-MM-DD"
+    )
+  if "po_rate" in df_orders.columns:
+    order_column_configs["po_rate"] = st.column_config.NumberColumn(
+        label="PO Rate (INR)", format="₹ %.2f"
     )
 
   edited_orders = st.data_editor(
@@ -316,6 +325,10 @@ with tab1:
       edited_orders["end_delivery_date"] = edited_orders[
           "end_delivery_date"
       ].fillna("")
+    if "po_rate" in edited_orders.columns:
+      edited_orders["po_rate"] = pd.to_numeric(
+          edited_orders["po_rate"], errors="coerce"
+      ).round(2)
     save_orders_to_db(edited_orders)
     st.success("Order backlog successfully saved to server database!")
     st.rerun()
@@ -397,7 +410,6 @@ with tab2:
               filtered_master[filter_column_2].astype(str).isin(selected_vals_2)
           ]
 
-  # --- ONE-CLICK EXCEL EXPORT BUTTON ---
   output = io.BytesIO()
   with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
     filtered_master.to_excel(writer, index=False, sheet_name="ProjectMaster")
@@ -593,7 +605,6 @@ with tab3:
   if wip_rep.empty or raw_wip_work_df.empty:
     st.info("No data available for WIP ageing report.")
   else:
-    # Excel Export for WIP Ageing
     output_wip = io.BytesIO()
     with pd.ExcelWriter(output_wip, engine="xlsxwriter") as writer:
       wip_rep.to_excel(writer, index=False, sheet_name="WIP_Ageing")
@@ -912,7 +923,7 @@ with tab5:
 
 # --- TAB 6: MILESTONE TRACKER ---
 with tab6:
-  st.subheader("📅 Milestone & Delivery Timeline Tracker")
+  st.subheader("📅 Milestone & Delivery Timeline Tracker (with RFD & WIP Weights)")
   if df_orders.empty:
     st.info("No order backlog data available.")
   else:
@@ -929,12 +940,26 @@ with tab6:
                       == "DISP"
                   ].sum(),
               ),
+              rfd_wt=(
+                  "draw_total_wt",
+                  lambda x: x[
+                      df_master.loc[x.index, "status"].astype(str).str.upper()
+                      == "RFD"
+                  ].sum(),
+              ),
+              wip_wt=(
+                  "draw_total_wt",
+                  lambda x: x[
+                      df_master.loc[x.index, "status"].astype(str).str.upper()
+                      == "WIP"
+                  ].sum(),
+              ),
           )
           .reset_index()
       )
     else:
       m_summary = pd.DataFrame(
-          columns=["project_no", "total_wt", "disp_wt"]
+          columns=["project_no", "total_wt", "disp_wt", "rfd_wt", "wip_wt"]
       )
 
     job_col = (
@@ -957,6 +982,15 @@ with tab6:
     else:
       timeline_df["total_wt"] = 0.0
       timeline_df["disp_wt"] = 0.0
+      timeline_df["rfd_wt"] = 0.0
+      timeline_df["wip_wt"] = 0.0
+
+    # Ensure numeric columns are rounded to 3 decimal places
+    for wt_col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt", "po_rate"]:
+      if wt_col in timeline_df.columns:
+        timeline_df[wt_col] = pd.to_numeric(
+            timeline_df[wt_col], errors="coerce"
+        ).round(3 if "wt" in wt_col else 2)
 
 
     def evaluate_milestone(row):
@@ -1021,8 +1055,21 @@ with tab6:
       return styles
 
 
+    # Column configs for 3 decimals on weights and INR for rate
+    timeline_configs = {}
+    for col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt"]:
+      if col in timeline_df.columns:
+        timeline_configs[col] = st.column_config.NumberColumn(
+            label=col.replace("_", " ").upper(), format="%.3f MT"
+        )
+    if "po_rate" in timeline_df.columns:
+      timeline_configs["po_rate"] = st.column_config.NumberColumn(
+          label="PO Rate (INR)", format="₹ %.2f"
+      )
+
     st.dataframe(
         timeline_df.style.apply(style_timeline, axis=None),
+        column_config=timeline_configs,
         use_container_width=True,
     )
 
@@ -1078,7 +1125,6 @@ with tab7:
 
     st.dataframe(contractor_summary, use_container_width=True)
 
-    # Bar chart for contractor productivity
     fig_contractor = px.bar(
         contractor_summary,
         x="contractor",
@@ -1104,7 +1150,6 @@ with tab8:
     c1, c2 = st.columns(2)
 
     with c1:
-      # Status breakdown pie chart
       status_counts = (
           df_master.groupby("status")["draw_total_wt"].sum().reset_index()
       )
@@ -1118,7 +1163,6 @@ with tab8:
       st.plotly_chart(fig_pie, use_container_width=True)
 
     with c2:
-      # Project tonnage comparison bar chart
       proj_counts = (
           df_master.groupby("project_no")["draw_total_wt"]
           .sum()
