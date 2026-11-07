@@ -48,7 +48,7 @@ def init_db():
             actual_wt REAL,
             draw_total_wt REAL,
             contractor TEXT,
-            Plant TEXT,
+            plant TEXT,
             status TEXT,
             wip_date TEXT,
             rfd_date TEXT,
@@ -92,6 +92,8 @@ def load_data_from_db():
 
   if not df_master.empty and "part_sl_no" in df_master.columns:
     df_master["part_sl_no"] = df_master["part_sl_no"].astype(str)
+  if not df_master.empty and "plant" not in df_master.columns:
+    df_master["plant"] = "Plant-1"
 
   for w_col in ["actual_wt", "draw_total_wt"]:
     if not df_master.empty and w_col in df_master.columns:
@@ -114,7 +116,7 @@ def load_data_from_db():
         "actual_wt": 2.268,
         "draw_total_wt": 2.268,
         "contractor": "MANOJ",
-        "Plant": "Plant-1",
+        "plant": "Plant-1",
         "status": "YTS",
         "wip_date": None,
         "rfd_date": None,
@@ -170,6 +172,8 @@ def calculate_automatic_status(df):
 def save_master_to_db(df):
   if "part_sl_no" in df.columns:
     df["part_sl_no"] = df["part_sl_no"].astype(str)
+  if "plant" not in df.columns:
+    df["plant"] = "Plant-1"
   for w_col in ["actual_wt", "draw_total_wt"]:
     if w_col in df.columns:
       df[w_col] = pd.to_numeric(df[w_col], errors="coerce").round(3)
@@ -214,7 +218,6 @@ dispatched_tonnage_raw = (
     else 0.0
 )
 
-# Rounded to whole numbers for KPI metrics
 total_tonnage_int = int(round(total_tonnage_raw))
 dispatched_tonnage_int = int(round(dispatched_tonnage_raw))
 completion_pct = (
@@ -1185,3 +1188,22 @@ with tab8:
           color_continuous_scale="Blues",
       )
       st.plotly_chart(fig_bar, use_container_width=True)
+
+    # Added Plant Distribution Chart for Multi-Bay Visual Analytics
+    if "plant" in df_master.columns:
+      st.markdown("---")
+      plant_counts = (
+          df_master.groupby(["plant", "status"])["draw_total_wt"]
+          .sum()
+          .reset_index()
+      )
+      fig_plant = px.bar(
+          plant_counts,
+          x="plant",
+          y="draw_total_wt",
+          color="status",
+          title="Tonnage Output Breakdown by Plant / Workshop Bay (MT)",
+          barmode="stack",
+          labels={"plant": "Plant / Bay", "draw_total_wt": "Weight (MT)"},
+      )
+      st.plotly_chart(fig_plant, use_container_width=True)
