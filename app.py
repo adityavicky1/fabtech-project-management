@@ -48,7 +48,7 @@ def init_db():
             actual_wt REAL,
             draw_total_wt REAL,
             contractor TEXT,
-            Plant TEXT,
+            plant TEXT,
             status TEXT,
             wip_date TEXT,
             rfd_date TEXT,
@@ -92,6 +92,8 @@ def load_data_from_db():
 
   if not df_master.empty and "part_sl_no" in df_master.columns:
     df_master["part_sl_no"] = df_master["part_sl_no"].astype(str)
+  if not df_master.empty and "plant" not in df_master.columns:
+    df_master["plant"] = "Plant-1"
 
   for w_col in ["actual_wt", "draw_total_wt"]:
     if not df_master.empty and w_col in df_master.columns:
@@ -114,7 +116,7 @@ def load_data_from_db():
         "actual_wt": 2.268,
         "draw_total_wt": 2.268,
         "contractor": "MANOJ",
-        "Plant": "Plant-1",
+        "plant": "Plant-1",
         "status": "YTS",
         "wip_date": None,
         "rfd_date": None,
@@ -170,6 +172,8 @@ def calculate_automatic_status(df):
 def save_master_to_db(df):
   if "part_sl_no" in df.columns:
     df["part_sl_no"] = df["part_sl_no"].astype(str)
+  if "plant" not in df.columns:
+    df["plant"] = "Plant-1"
   for w_col in ["actual_wt", "draw_total_wt"]:
     if w_col in df.columns:
       df[w_col] = pd.to_numeric(df[w_col], errors="coerce").round(3)
@@ -214,7 +218,6 @@ dispatched_tonnage_raw = (
     else 0.0
 )
 
-# Rounded to whole numbers for KPI metrics
 total_tonnage_int = int(round(total_tonnage_raw))
 dispatched_tonnage_int = int(round(dispatched_tonnage_raw))
 completion_pct = (
@@ -261,7 +264,7 @@ kpi4.metric(
 
 st.markdown("---")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "1. Order Backlog",
     "2. Project Master Sheet",
     "3. WIP Ageing Report",
@@ -270,6 +273,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "6. Milestone Tracker",
     "7. Contractor Performance",
     "8. Visual Analytics & Charts",
+    "9. Monthly RFD & Dispatch",
 ])
 
 # --- TAB 1: ORDER BACKLOG & UPLOAD ---
@@ -1185,3 +1189,124 @@ with tab8:
           color_continuous_scale="Blues",
       )
       st.plotly_chart(fig_bar, use_container_width=True)
+
+    if "plant" in df_master.columns:
+      st.markdown("---")
+      plant_counts = (
+          df_master.groupby(["plant", "status"])["draw_total_wt"]
+          .sum()
+          .reset_index()
+      )
+      fig_plant = px.bar(
+          plant_counts,
+          x="plant",
+          y="draw_total_wt",
+          color="status",
+          title="Tonnage Output Breakdown by Plant / Workshop Bay (MT)",
+          barmode="stack",
+          labels={"plant": "Plant / Bay", "draw_total_wt": "Weight (MT)"},
+      )
+      st.plotly_chart(fig_plant, use_container_width=True)
+
+
+# --- TAB 9: MONTHLY RFD & DISPATCH PERFORMANCE ---
+with tab9:
+  st.subheader(
+      "📅 Monthly RFD & Dispatch Performance (Project & Contractor Wise)"
+  )
+  st.markdown(
+      "Select a target month to review specific RFD and Dispatch output."
+  )
+
+  if df_master.empty:
+    st.info("No master data available.")
+  else:
+    m_df = df_master.copy()
+    m_df["rfd_dt"] = pd.to_datetime(m_df["rfd_date"], errors="coerce")
+    m_df["dispatch_dt"] = pd.to_datetime(m_df["dispatch_date"], errors="coerce")
+
+    rfd_months = m_df["rfd_dt"].dt.strftime("%Y-%m").dropna().unique()
+    disp_months = m_df["dispatch_dt"].dt.strftime("%Y-%m").dropna().unique()
+    all_months = sorted(list(set(rfd_months) | set(disp_months)))
+
+    current_ym = pd.Timestamp.today().strftime("%Y-%m")
+
+    if not all_months:
+      st.info("No RFD or Dispatch date records found in the Master Sheet.")
+    else:
+      default_ix = (
+          all_months.index(current_ym)
+          if current_ym in all_months
+          else len(all_months) - 1
+      )
+      selected_month = st.selectbox(
+          "Filter by Month (YYYY-MM)",
+          options=all_months,
+          index=default_ix,
+          key="monthly_perf_filter",
+      )
+
+      rfd_filtered = m_df[m_df["rfd_dt"].dt.strftime("%Y-%m") == selected_month]
+      disp_filtered = m_df[
+          m_df["dispatch_dt"].dt.strftime("%Y-%m") == selected_month
+      ]
+
+      st.markdown(f"### 📁 Project-Wise Summary for {selected_month}")
+      proj_rfd = (
+          rfd_filtered.groupby("project_no")["draw_total_wt"]
+          .sum()
+          .reset_index()
+          .rename(columns={"draw_total_wt": "RFD_Weight_MT"})
+      )
+      proj_disp = (
+          disp_filtered.groupby("project_no")["draw_total_wt"]
+          .sum()
+          .reset_index()
+          .rename(columns={"draw_total_wt": "Dispatch_Weight_MT"})
+      )
+
+      proj_merged = pd.merge(
+          proj_rfd, proj_disp, on="project_no", how="outer"
+      ).fillna(0)
+      proj_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = proj_merged[
+          ["RFD_Weight_MT", "Dispatch_Weight_MT"]
+      ].round(3)
+
+      if proj_merged.empty:
+        st.info(
+            f"No project data recorded for RFD or Dispatch in {selected_month}."
+        )
+      else:
+        st.dataframe(proj_merged, use_container_width=True)
+
+      st.markdown("---")
+      st.markdown(f"### 👷 Contractor-Wise Summary for {selected_month}")
+      con_col = "contractor" if "contractor" in m_df.columns else "Contractor"
+      if con_col in m_df.columns:
+        con_rfd = (
+            rfd_filtered.groupby(con_col)["draw_total_wt"]
+            .sum()
+            .reset_index()
+            .rename(columns={"draw_total_wt": "RFD_Weight_MT"})
+        )
+        con_disp = (
+            disp_filtered.groupby(con_col)["draw_total_wt"]
+            .sum()
+            .reset_index()
+            .rename(columns={"draw_total_wt": "Dispatch_Weight_MT"})
+        )
+
+        con_merged = pd.merge(con_rfd, con_disp, on=con_col, how="outer").fillna(
+            0
+        )
+        con_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = con_merged[
+            ["RFD_Weight_MT", "Dispatch_Weight_MT"]
+        ].round(3)
+
+        if con_merged.empty:
+          st.info(
+              f"No contractor data recorded for RFD or Dispatch in"
+              f" {selected_month}."
+          )
+        else:
+          st.dataframe(con_merged, use_container_width=True)
