@@ -1211,102 +1211,122 @@ with tab8:
 
 # --- TAB 9: MONTHLY RFD & DISPATCH PERFORMANCE ---
 with tab9:
-  st.subheader(
-      "📅 Monthly RFD & Dispatch Performance (Project & Contractor Wise)"
-  )
-  st.markdown(
-      "Select a target month to review specific RFD and Dispatch output."
-  )
+    st.subheader(
+        "📅 Monthly RFD & Dispatch Performance (Project & Contractor Wise)"
+    )
+    st.markdown(
+        "Select a target month to review specific RFD and Dispatch output."
+    )
 
-  if df_master.empty:
-    st.info("No master data available.")
-  else:
-    m_df = df_master.copy()
-    m_df["rfd_dt"] = pd.to_datetime(m_df["rfd_date"], errors="coerce")
-    m_df["dispatch_dt"] = pd.to_datetime(m_df["dispatch_date"], errors="coerce")
-
-    rfd_months = m_df["rfd_dt"].dt.strftime("%Y-%m").dropna().unique()
-    disp_months = m_df["dispatch_dt"].dt.strftime("%Y-%m").dropna().unique()
-    all_months = sorted(list(set(rfd_months) | set(disp_months)))
-
-    current_ym = pd.Timestamp.today().strftime("%Y-%m")
-
-    if not all_months:
-      st.info("No RFD or Dispatch date records found in the Master Sheet.")
+    if df_master.empty:
+        st.info("No master data available.")
     else:
-      default_ix = (
-          all_months.index(current_ym)
-          if current_ym in all_months
-          else len(all_months) - 1
-      )
-      selected_month = st.selectbox(
-          "Filter by Month (YYYY-MM)",
-          options=all_months,
-          index=default_ix,
-          key="monthly_perf_filter",
-      )
+        m_df = df_master.copy()
+        m_df["rfd_dt"] = pd.to_datetime(m_df["rfd_date"], errors="coerce")
+        m_df["dispatch_dt"] = pd.to_datetime(m_df["dispatch_date"], errors="coerce")
 
-      rfd_filtered = m_df[m_df["rfd_dt"].dt.strftime("%Y-%m") == selected_month]
-      disp_filtered = m_df[
-          m_df["dispatch_dt"].dt.strftime("%Y-%m") == selected_month
-      ]
+        rfd_months = m_df["rfd_dt"].dt.strftime("%Y-%m").dropna().unique()
+        disp_months = m_df["dispatch_dt"].dt.strftime("%Y-%m").dropna().unique()
+        all_months = sorted(list(set(rfd_months) | set(disp_months)))
 
-      st.markdown(f"### 📁 Project-Wise Summary for {selected_month}")
-      proj_rfd = (
-          rfd_filtered.groupby("project_no")["draw_total_wt"]
-          .sum()
-          .reset_index()
-          .rename(columns={"draw_total_wt": "RFD_Weight_MT"})
-      )
-      proj_disp = (
-          disp_filtered.groupby("project_no")["draw_total_wt"]
-          .sum()
-          .reset_index()
-          .rename(columns={"draw_total_wt": "Dispatch_Weight_MT"})
-      )
+        current_ym = pd.Timestamp.today().strftime("%Y-%m")
 
-      proj_merged = pd.merge(
-          proj_rfd, proj_disp, on="project_no", how="outer"
-      ).fillna(0)
-      proj_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = proj_merged[
-          ["RFD_Weight_MT", "Dispatch_Weight_MT"]
-      ].round(3)
-
-      if proj_merged.empty:
-        st.info(
-            f"No project data recorded for RFD or Dispatch in {selected_month}."
-        )
-      else:
-        st.dataframe(proj_merged, use_container_width=True)
-
-      st.markdown("---")
-      st.markdown(f"### 👷 Contractor-Wise Summary for {selected_month}")
-      con_col = "contractor" if "contractor" in m_df.columns else "Contractor"
-      if con_col in m_df.columns:
-        con_rfd = (
-            rfd_filtered.groupby(con_col)["draw_total_wt"]
-            .sum()
-            .reset_index()
-            .rename(columns={"draw_total_wt": "RFD_Weight_MT"})
-        )
-        con_disp = (
-            disp_filtered.groupby(con_col)["draw_total_wt"]
-            .sum()
-            .reset_index()
-            .rename(columns={"draw_total_wt": "Dispatch_Weight_MT"})
-        )
-
-        con_merged = pd.merge(con_rfd, con_disp, on=con_col, how="outer").fillna(
-            0
-        )
-        con_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = con_merged[
-            ["RFD_Weight_MT", "Dispatch_Weight_MT"]
-        ].round(3)
-
-        if con_merged.empty:
-          st.info(
-              f"No contractor data recorded for RFD or Dispatch in"
-              f" {selected_month}."
-          )
+        if not all_months:
+            st.info("No RFD or Dispatch date records found in the Master Sheet.")
         else:
-          st.dataframe(con_merged, use_container_width=True)
+            default_ix = (
+                all_months.index(current_ym)
+                if current_ym in all_months
+                else len(all_months) - 1
+            )
+            selected_month = st.selectbox(
+                "Filter by Month (YYYY-MM)",
+                options=all_months,
+                index=default_ix,
+                key="monthly_perf_filter",
+            )
+
+            rfd_filtered = m_df[m_df["rfd_dt"].dt.strftime("%Y-%m") == selected_month]
+            disp_filtered = m_df[
+                m_df["dispatch_dt"].dt.strftime("%Y-%m") == selected_month
+            ]
+
+            st.markdown(f"### 📁 Project-Wise Summary for {selected_month}")
+            proj_rfd = (
+                rfd_filtered.groupby("project_no")["draw_total_wt"]
+                .sum()
+                .reset_index()
+                .rename(columns={"draw_total_wt": "RFD_Weight_MT"})
+            )
+            proj_disp = (
+                disp_filtered.groupby("project_no")["draw_total_wt"]
+                .sum()
+                .reset_index()
+                .rename(columns={"draw_total_wt": "Dispatch_Weight_MT"})
+            )
+
+            proj_merged = pd.merge(
+                proj_rfd, proj_disp, on="project_no", how="outer"
+            ).fillna(0)
+            proj_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = proj_merged[
+                [["RFD_Weight_MT", "Dispatch_Weight_MT"]]
+            ].round(3)
+
+            if proj_merged.empty:
+                st.info(
+                    f"No project data recorded for RFD or Dispatch in {selected_month}."
+                )
+            else:
+                # Add Project-Wise Grand Total Row
+                total_proj_rfd = round(proj_merged["RFD_Weight_MT"].sum(), 3)
+                total_proj_disp = round(proj_merged["Dispatch_Weight_MT"].sum(), 3)
+                proj_total_row = pd.DataFrame([{
+                    "project_no": "GRAND TOTAL",
+                    "RFD_Weight_MT": total_proj_rfd,
+                    "Dispatch_Weight_MT": total_proj_disp
+                }])
+                proj_merged = pd.concat([proj_merged, proj_total_row], ignore_index=True)
+
+                st.dataframe(proj_merged, use_container_width=True)
+
+            st.markdown("---")
+            st.markdown(f"### 👷 Contractor-Wise Summary for {selected_month}")
+            con_col = "contractor" if "contractor" in m_df.columns else "Contractor"
+            if con_col in m_df.columns:
+                con_rfd = (
+                    rfd_filtered.groupby(con_col)["draw_total_wt"]
+                    .sum()
+                    .reset_index()
+                    .rename(columns={"draw_total_wt": "RFD_Weight_MT"})
+                )
+                con_disp = (
+                    disp_filtered.groupby(con_col)["draw_total_wt"]
+                    .sum()
+                    .reset_index()
+                    .rename(columns={"draw_total_wt": "Dispatch_Weight_MT"})
+                )
+
+                con_merged = pd.merge(con_rfd, con_disp, on=con_col, how="outer").fillna(
+                    0
+                )
+                con_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = con_merged[
+                    ["RFD_Weight_MT", "Dispatch_Weight_MT"]
+                ].round(3)
+
+                if con_merged.empty:
+                    st.info(
+                        f"No contractor data recorded for RFD or Dispatch in"
+                        f" {selected_month}."
+                    )
+                else:
+                    # Add Contractor-Wise Grand Total Row
+                    total_con_rfd = round(con_merged["RFD_Weight_MT"].sum(), 3)
+                    total_con_disp = round(con_merged["Dispatch_Weight_MT"].sum(), 3)
+                    con_total_row = pd.DataFrame([{
+                        con_col: "GRAND TOTAL",
+                        "RFD_Weight_MT": total_con_rfd,
+                        "Dispatch_Weight_MT": total_con_disp
+                    }])
+                    con_merged = pd.concat([con_merged, con_total_row], ignore_index=True)
+
+                    st.dataframe(con_merged, use_container_width=True)
