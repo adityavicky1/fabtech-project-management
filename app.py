@@ -1268,15 +1268,16 @@ with tab9:
             proj_merged = pd.merge(
                 proj_rfd, proj_disp, on="project_no", how="outer"
             ).fillna(0)
-            proj_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = proj_merged[
-                [["RFD_Weight_MT", "Dispatch_Weight_MT"]]
-            ].round(3)
 
-            if proj_merged.empty:
-                st.info(
-                    f"No project data recorded for RFD or Dispatch in {selected_month}."
-                )
+            # Safeguard check to ensure columns exist before rounding or modifying
+            if proj_merged.empty or "project_no" not in proj_merged.columns:
+                st.info(f"No project data recorded for RFD or Dispatch in {selected_month}.")
             else:
+                if "RFD_Weight_MT" in proj_merged.columns and "Dispatch_Weight_MT" in proj_merged.columns:
+                    proj_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = proj_merged[
+                        ["RFD_Weight_MT", "Dispatch_Weight_MT"]
+                    ].round(3)
+
                 # Add Project-Wise Grand Total Row
                 total_proj_rfd = round(proj_merged["RFD_Weight_MT"].sum(), 3)
                 total_proj_disp = round(proj_merged["Dispatch_Weight_MT"].sum(), 3)
@@ -1306,19 +1307,16 @@ with tab9:
                     .rename(columns={"draw_total_wt": "Dispatch_Weight_MT"})
                 )
 
-                con_merged = pd.merge(con_rfd, con_disp, on=con_col, how="outer").fillna(
-                    0
-                )
-                con_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = con_merged[
-                    ["RFD_Weight_MT", "Dispatch_Weight_MT"]
-                ].round(3)
+                con_merged = pd.merge(con_rfd, con_disp, on=con_col, how="outer").fillna(0)
 
-                if con_merged.empty:
-                    st.info(
-                        f"No contractor data recorded for RFD or Dispatch in"
-                        f" {selected_month}."
-                    )
+                if con_merged.empty or con_col not in con_merged.columns:
+                    st.info(f"No contractor data recorded for RFD or Dispatch in {selected_month}.")
                 else:
+                    if "RFD_Weight_MT" in con_merged.columns and "Dispatch_Weight_MT" in con_merged.columns:
+                        con_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = con_merged[
+                            ["RFD_Weight_MT", "Dispatch_Weight_MT"]
+                        ].round(3)
+
                     # Add Contractor-Wise Grand Total Row
                     total_con_rfd = round(con_merged["RFD_Weight_MT"].sum(), 3)
                     total_con_disp = round(con_merged["Dispatch_Weight_MT"].sum(), 3)
