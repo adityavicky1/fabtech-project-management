@@ -851,12 +851,15 @@ with tab6:
       timeline_df["rfd_wt"] = 0.0
       timeline_df["wip_wt"] = 0.0
 
-    # Ensure numeric columns are rounded to 3 decimal places
+    # Round weight columns to whole numbers (integers)
     for wt_col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt"]:
       if wt_col in timeline_df.columns:
-        timeline_df[wt_col] = pd.to_numeric(
-            timeline_df[wt_col], errors="coerce"
-        ).round(3)
+        timeline_df[wt_col] = (
+            pd.to_numeric(timeline_df[wt_col], errors="coerce")
+            .fillna(0)
+            .round()
+            .astype(int)
+        )
 
 
     def evaluate_milestone(row):
@@ -902,12 +905,13 @@ with tab6:
     else:
       styled_timeline = timeline_df.style
 
-    # Configure column formatting for clean 3-decimal displays
+    # Configure whole number formatting and move (MT) into headers
     timeline_configs = {}
     for col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt"]:
       if col in timeline_df.columns:
+        label_text = f"{col.replace('_', ' ').upper()} (MT)"
         timeline_configs[col] = st.column_config.NumberColumn(
-            label=col.replace("_", " ").upper(), format="%.3f MT"
+            label=label_text, format="%,d"
         )
     if "po_rate" in timeline_df.columns:
       timeline_configs["po_rate"] = st.column_config.NumberColumn(
