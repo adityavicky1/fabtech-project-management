@@ -10,3 +10,4 @@ google-genai
 xlrd
 plotly
 xlsxwriter
+PyGithub>=1.59.0
