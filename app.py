@@ -1,7 +1,9 @@
+import base64
 import datetime
 import io
 import os
 import sqlite3
+from github import Github
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -10,16 +12,60 @@ st.set_page_config(
     page_title="FabTech Project Management System", layout="wide"
 )
 
+# --- AUTHENTICATION CONFIGURATION ---
+if "authenticated" not in st.session_state:
+  st.session_state["authenticated"] = False
+  st.session_state["username"] = ""
+
+VALID_CREDENTIALS = {"admin": "steel2030", "avikram": "plant2030"}
+
+
+def login_screen():
+  st.markdown(
+      """
+        <style>
+        .stApp { background-color: #f4f6f9; }
+        .login-container { max-width: 450px; margin: 80px auto; padding: 2rem; background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        </style>
+        """,
+      unsafe_allow_html=True,
+  )
+
+  col1, col2, col3 = st.columns([1, 2, 1])
+  with col2:
+    st.markdown("<div class='login-container'>", unsafe_allow_html=True)
+    st.title("🔐 FabTech Portal")
+    st.markdown("### Secure Login")
+
+    with st.form("login_form"):
+      username = st.text_input("Username")
+      password = st.text_input("Password", type="password")
+      submit = st.form_submit_button("Sign In", use_container_width=True)
+
+      if submit:
+        if (
+            username in VALID_CREDENTIALS
+            and VALID_CREDENTIALS[username] == password
+        ):
+          st.session_state["authenticated"] = True
+          st.session_state["username"] = username
+          st.success("Login successful! Loading dashboard...")
+          st.rerun()
+        else:
+          st.error("❌ Invalid username or password.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+if not st.session_state["authenticated"]:
+  login_screen()
+  st.stop()
+
 # --- CUSTOM BACKGROUND & UI STYLING ---
 st.markdown(
     """
     <style>
-    .stApp {
-        background-color: #f4f6f9;
-    }
-    h1, h2, h3 {
-        color: #1f3a60;
-    }
+    .stApp { background-color: #f4f6f9; }
+    h1, h2, h3 { color: #1f3a60; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -169,6 +215,45 @@ def calculate_automatic_status(df):
   return df
 
 
+def backup_db_to_github():
+  """Automatically pushes the SQLite database to GitHub to persist data on Streamlit Cloud."""
+  try:
+    if "GITHUB_TOKEN" not in st.secrets or "GITHUB_REPO" not in st.secrets:
+      return
+    token = st.secrets["GITHUB_TOKEN"]
+    repo_name = st.secrets["GITHUB_REPO"]
+    file_path = "fabtech_server_data.db"
+
+    if not os.path.exists(file_path):
+      return
+
+    g = Github(token)
+    repo = g.get_repo(repo_name)
+
+    with open(file_path, "rb") as f:
+      db_content = f.read()
+
+    try:
+      file_in_repo = repo.get_contents(file_path)
+      repo.update_file(
+          path=file_path,
+          message="[Auto-Backup] Update SQLite database from Streamlit Cloud",
+          content=db_content,
+          sha=file_in_repo.sha,
+      )
+    except Exception:
+      repo.create_file(
+          path=file_path,
+          message=(
+              "[Auto-Backup] Initial SQLite database upload from Streamlit Cloud"
+          ),
+          content=db_content,
+      )
+    st.toast("Database backed up to GitHub successfully!", icon="☁️")
+  except Exception as e:
+    st.error(f"GitHub Auto-Backup Error: {e}")
+
+
 def save_master_to_db(df):
   if "part_sl_no" in df.columns:
     df["part_sl_no"] = df["part_sl_no"].astype(str)
@@ -181,24 +266,56 @@ def save_master_to_db(df):
   conn = sqlite3.connect(DB_FILE)
   df.to_sql("master_sheet", conn, if_exists="replace", index=False)
   conn.close()
+  backup_db_to_github()
 
 
 def save_orders_to_db(df):
   conn = sqlite3.connect(DB_FILE)
   df.to_sql("order_backlog", conn, if_exists="replace", index=False)
   conn.close()
+  backup_db_to_github()
 
 
 df_master, df_orders = load_data_from_db()
 df_master = calculate_automatic_status(df_master)
 
+# --- SIDEBAR: USER INFO & BACKUP RESTORE ---
+st.sidebar.markdown(f"👤 **Logged in as:** `{st.session_state['username']}`")
+if st.sidebar.button("🚪 Sign Out"):
+  st.session_state["authenticated"] = False
+  st.session_state["username"] = ""
+  st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("💾 Database Backup & Restore")
+if os.path.exists(DB_FILE):
+  with open(DB_FILE, "rb") as f:
+    db_bytes = f.read()
+  st.sidebar.download_button(
+      label="📥 Download Database Backup",
+      data=db_bytes,
+      file_name="fabtech_server_data.db",
+      mime="application/octet-stream",
+  )
+
+uploaded_backup = st.sidebar.file_uploader("📤 Restore Database (.db)", type=["db"])
+if uploaded_backup is not None:
+  if st.sidebar.button("⚠️ Confirm & Overwrite Database", type="primary"):
+    try:
+      with open(DB_FILE, "wb") as f:
+        f.write(uploaded_backup.getbuffer())
+      st.sidebar.success("Database restored successfully! Reloading...")
+      st.rerun()
+    except Exception as e:
+      st.sidebar.error(f"Restoration failed: {e}")
+
+# --- MAIN APP HEADER & KPIS ---
 st.title("⚙️ FabTech Fabrication Project Management & Tracking Portal")
 st.markdown(
     "Server-Persistent Master Data, Visual Analytics, Contractor Tracker, and"
-    " One-Click Exports."
+    " Monthly Performance."
 )
 
-# --- TOP-LINE KPI SUMMARY CARDS (WHOLE NUMBERS) ---
 st.markdown("### 📊 Executive KPI Summary")
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 
@@ -343,12 +460,11 @@ with tab1:
     st.success("Order backlog successfully saved to server database!")
     st.rerun()
 
-# --- TAB 2: PROJECT MASTER SHEET WITH DYNAMIC FILTERS & EXPORT ---
+# --- TAB 2: PROJECT MASTER SHEET ---
 with tab2:
   st.subheader(
       "Project Master Sheet (Dynamic Filters, Editing & Excel Export)"
   )
-
   uploaded_file = st.file_uploader(
       "Upload Project Master Excel/CSV", type=["xlsx", "csv"], key="master_upload"
   )
@@ -360,16 +476,14 @@ with tab2:
         )
       else:
         df_new = pd.read_excel(uploaded_file, dtype=str)
-
       df_new.columns = [
           c.strip().lower().replace(" ", "_").replace(".", "")
           for c in df_new.columns
       ]
       if "part_sl_no" in df_new.columns:
         df_new["part_sl_no"] = df_new["part_sl_no"].astype(str)
-
       save_master_to_db(df_new)
-      st.success("Project master sheet uploaded and saved permanently to server!")
+      st.success("Project master sheet uploaded and saved to server!")
       st.rerun()
     except Exception as e:
       st.error(f"Error processing uploaded file: {e}")
@@ -383,9 +497,7 @@ with tab2:
         options=["None"] + all_columns,
         key="dynamic_filter_col",
     )
-
     filtered_master = df_master.copy()
-
     if filter_column != "None":
       unique_vals = sorted(
           df_master[filter_column].dropna().astype(str).unique().tolist()
@@ -393,41 +505,17 @@ with tab2:
       selected_vals = st.multiselect(
           f"Select value(s) for '{filter_column}'", options=unique_vals
       )
-
       if selected_vals:
         filtered_master = filtered_master[
             filtered_master[filter_column].astype(str).isin(selected_vals)
         ]
 
-      filter_column_2 = st.selectbox(
-          "Select Second Column to Filter By (Optional)",
-          options=["None"] + all_columns,
-          key="dynamic_filter_col_2",
-      )
-      if filter_column_2 != "None":
-        unique_vals_2 = sorted(
-            filtered_master[filter_column_2]
-            .dropna()
-            .astype(str)
-            .unique()
-            .tolist()
-        )
-        selected_vals_2 = st.multiselect(
-            f"Select value(s) for '{filter_column_2}'", options=unique_vals_2
-        )
-        if selected_vals_2:
-          filtered_master = filtered_master[
-              filtered_master[filter_column_2].astype(str).isin(selected_vals_2)
-          ]
-
   output = io.BytesIO()
   with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
     filtered_master.to_excel(writer, index=False, sheet_name="ProjectMaster")
-  excel_data = output.getvalue()
-
   st.download_button(
       label="📥 Download Filtered Master Sheet as Excel (.xlsx)",
-      data=excel_data,
+      data=output.getvalue(),
       file_name="FabTech_Project_Master.xlsx",
       mime=(
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -449,7 +537,6 @@ with tab2:
       column_configurations[d_col] = st.column_config.DateColumn(
           label=d_col.replace("_", " ").title(), format="YYYY-MM-DD"
       )
-
   if "status" in filtered_master.columns:
     column_configurations["status"] = st.column_config.TextColumn(
         label="Status (Auto)", disabled=True
@@ -461,21 +548,17 @@ with tab2:
       key="master_editor",
       column_config=column_configurations,
   )
-
   if st.button("💾 Save Master Sheet Changes to Server"):
     full_df = df_master.copy()
-
     for idx, row in edited_filtered_master.iterrows():
       if idx in full_df.index:
         for col in edited_filtered_master.columns:
           val = row[col]
-          if pd.isna(val):
-            full_df.loc[idx, col] = None
-          else:
-            full_df.loc[idx, col] = val
+          full_df.loc[idx, col] = None if pd.isna(val) else val
       else:
-        new_row_df = pd.DataFrame([row])
-        full_df = pd.concat([full_df, new_row_df], ignore_index=True)
+        full_df = pd.concat(
+            [full_df, pd.DataFrame([row])], ignore_index=True
+        )
 
     for d_col in ["wip_date", "rfd_date", "dispatch_date"]:
       if d_col in full_df.columns:
@@ -484,22 +567,12 @@ with tab2:
         ).dt.strftime("%Y-%m-%d")
         full_df[d_col] = full_df[d_col].fillna("")
 
-    for w_col in ["actual_wt", "draw_total_wt"]:
-      if w_col in full_df.columns:
-        full_df[w_col] = pd.to_numeric(
-            full_df[w_col], errors="coerce"
-        ).round(3)
-
-    full_df = calculate_automatic_status(full_df)
     save_master_to_db(full_df)
-    st.success(
-        "Project master sheet successfully updated, auto-status calculated, and"
-        " saved to server!"
-    )
+    st.success("Project master sheet successfully updated and saved to server!")
     st.rerun()
 
 
-# --- HELPER: AGEING REPORT CALCULATION ---
+# --- HELPER: AGEING REPORT ---
 def get_ageing_detail_df(df, status_val, date_col, weight_col="draw_total_wt"):
   empty_rep = pd.DataFrame(
       columns=[
@@ -514,11 +587,9 @@ def get_ageing_detail_df(df, status_val, date_col, weight_col="draw_total_wt"):
   )
   if df.empty or "status" not in df.columns:
     return pd.DataFrame(), empty_rep
-
   work_df = df[df["status"].astype(str).str.upper() == status_val.upper()].copy()
   if work_df.empty:
     return pd.DataFrame(), empty_rep
-
   if date_col in work_df.columns:
     work_df[date_col] = pd.to_datetime(work_df[date_col], errors="coerce")
     work_df["Age"] = (today - work_df[date_col]).dt.days
@@ -540,14 +611,10 @@ def get_ageing_detail_df(df, status_val, date_col, weight_col="draw_total_wt"):
       return ">60 Days"
 
   work_df["Bucket"] = work_df["Age"].apply(get_bucket)
-  if weight_col not in work_df.columns:
-    weight_col = work_df.columns[11]
-
   work_df[weight_col] = pd.to_numeric(
       work_df[weight_col], errors="coerce"
   ).fillna(0)
   proj_col = "project_no" if "project_no" in work_df.columns else work_df.columns[2]
-
   pivot = (
       work_df.pivot_table(
           index=proj_col,
@@ -559,26 +626,14 @@ def get_ageing_detail_df(df, status_val, date_col, weight_col="draw_total_wt"):
       .reset_index()
       .rename(columns={proj_col: "ProjectNo"})
   )
-
-  expected_cols = [
-      "ProjectNo",
-      "0-7 Days",
-      "8-15 Days",
-      "16-30 Days",
-      "30-60 Days",
-      ">60 Days",
-  ]
-  for c in expected_cols:
+  bucket_cols = ["0-7 Days", "8-15 Days", "16-30 Days", "30-60 Days", ">60 Days"]
+  for c in bucket_cols:
     if c not in pivot.columns:
       pivot[c] = 0.0
-
-  bucket_cols = ["0-7 Days", "8-15 Days", "16-30 Days", "30-60 Days", ">60 Days"]
   pivot["Total Weight"] = pivot[bucket_cols].sum(axis=1)
   final_df = pivot[["ProjectNo"] + bucket_cols + ["Total Weight"]]
-
   numeric_cols = final_df.select_dtypes(include=["number"]).columns
   final_df[numeric_cols] = final_df[numeric_cols].round(3)
-
   if not final_df.empty:
     total_row = {
         col: round(final_df[col].sum(), 3)
@@ -587,7 +642,6 @@ def get_ageing_detail_df(df, status_val, date_col, weight_col="draw_total_wt"):
         for col in final_df.columns
     }
     final_df = pd.concat([final_df, pd.DataFrame([total_row])], ignore_index=True)
-
   return work_df, final_df
 
 
@@ -597,18 +651,16 @@ def style_ageing_report(df):
   styles = pd.DataFrame("", index=df.index, columns=df.columns)
   if "Total Weight" in df.columns:
     styles["Total Weight"] = "background-color: #e2f0d9; font-weight: bold;"
-
   last_idx = df.index[-1]
   if (
       "ProjectNo" in df.columns
       and str(df.loc[last_idx, "ProjectNo"]).strip().upper() == "TOTAL"
   ):
     styles.loc[last_idx, :] = "background-color: #fff2cc; font-weight: bold;"
-
   return styles
 
 
-# --- TAB 3: WIP AGEING REPORT WITH EXCEL EXPORT & DRILL-DOWN ---
+# --- TAB 3: WIP AGEING REPORT ---
 with tab3:
   st.subheader("WIP Ageing Bucket Report & Excel Export")
   raw_wip_work_df, wip_rep = get_ageing_detail_df(df_master, "WIP", "wip_date")
@@ -626,64 +678,13 @@ with tab3:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
     )
-
     numeric_cols = wip_rep.select_dtypes(include=["number"]).columns
-    styled_wip = (
-        wip_rep.style.apply(style_ageing_report, axis=None)
-        .format("{:.3f}", subset=numeric_cols)
-    )
+    styled_wip = wip_rep.style.apply(
+        style_ageing_report, axis=None
+    ).format("{:.3f}", subset=numeric_cols)
     st.dataframe(styled_wip, use_container_width=True)
 
-    st.markdown("---")
-    st.markdown("### 🔍 Drill-Down: View Master Mark Numbers for WIP")
-    d_col1, d_col2 = st.columns(2)
-    with d_col1:
-      available_projs = sorted(
-          raw_wip_work_df["project_no"].dropna().astype(str).unique().tolist()
-      )
-      sel_proj = st.selectbox(
-          "Select Project No for Drill-Down",
-          options=available_projs,
-          key="wip_drill_proj",
-      )
-    with d_col2:
-      sel_bucket = st.selectbox(
-          "Select Age Bucket",
-          options=[
-              "0-7 Days",
-              "8-15 Days",
-              "16-30 Days",
-              "30-60 Days",
-              ">60 Days",
-          ],
-          key="wip_drill_bucket",
-      )
-
-    drill_filtered = raw_wip_work_df[
-        (raw_wip_work_df["project_no"].astype(str) == str(sel_proj))
-        & (raw_wip_work_df["Bucket"] == sel_bucket)
-    ]
-    if drill_filtered.empty:
-      st.info(
-          "No items found for the selected Project and Age Bucket combination."
-      )
-    else:
-      st.dataframe(
-          drill_filtered[[
-              "sr_no",
-              "drawing_no",
-              "element_type",
-              "mark_no",
-              "qty",
-              "draw_total_wt",
-              "contractor",
-              "wip_date",
-              "Age",
-          ]],
-          use_container_width=True,
-      )
-
-# --- TAB 4: RFD AGEING REPORT WITH EXCEL EXPORT & DRILL-DOWN ---
+# --- TAB 4: RFD AGEING REPORT ---
 with tab4:
   st.subheader("RFD Ageing Bucket Report & Excel Export")
   raw_rfd_work_df, rfd_rep = get_ageing_detail_df(df_master, "RFD", "rfd_date")
@@ -701,65 +702,13 @@ with tab4:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
     )
-
     numeric_cols = rfd_rep.select_dtypes(include=["number"]).columns
-    styled_rfd = (
-        rfd_rep.style.apply(style_ageing_report, axis=None)
-        .format("{:.3f}", subset=numeric_cols)
-    )
+    styled_rfd = rfd_rep.style.apply(
+        style_ageing_report, axis=None
+    ).format("{:.3f}", subset=numeric_cols)
     st.dataframe(styled_rfd, use_container_width=True)
 
-    st.markdown("---")
-    st.markdown("### 🔍 Drill-Down: View Master Mark Numbers for RFD")
-    rd_col1, rd_col2 = st.columns(2)
-    with rd_col1:
-      available_rfd_projs = sorted(
-          raw_rfd_work_df["project_no"].dropna().astype(str).unique().tolist()
-      )
-      sel_rfd_proj = st.selectbox(
-          "Select Project No for Drill-Down",
-          options=available_rfd_projs,
-          key="rfd_drill_proj",
-      )
-    with rd_col2:
-      sel_rfd_bucket = st.selectbox(
-          "Select Age Bucket",
-          options=[
-              "0-7 Days",
-              "8-15 Days",
-              "16-30 Days",
-              "30-60 Days",
-              ">60 Days",
-          ],
-          key="rfd_drill_bucket",
-      )
-
-    drill_rfd_filtered = raw_rfd_work_df[
-        (raw_rfd_work_df["project_no"].astype(str) == str(sel_rfd_proj))
-        & (raw_rfd_work_df["Bucket"] == sel_rfd_bucket)
-    ]
-    if drill_rfd_filtered.empty:
-      st.info(
-          "No items found for the selected Project and Age Bucket combination."
-      )
-    else:
-      st.dataframe(
-          drill_rfd_filtered[[
-              "sr_no",
-              "drawing_no",
-              "element_type",
-              "mark_no",
-              "qty",
-              "draw_total_wt",
-              "contractor",
-              "rfd_date",
-              "Age",
-          ]],
-          use_container_width=True,
-      )
-
-
-# --- TAB 5: OVERALL PROJECT STATUS PIVOT WITH DRILL-DOWN ---
+# --- TAB 5: OVERALL PROJECT STATUS PIVOT ---
 with tab5:
   st.subheader("Overall Project Status Summary Pivot & Excel Export")
 
@@ -769,18 +718,13 @@ with tab5:
       return df_m, pd.DataFrame(
           columns=["ProjectNo", "Project Name", "Grand Total"]
       )
-
     work_df = df_m.copy()
-    if weight_col not in work_df.columns:
-      weight_col = work_df.columns[11]
-
     work_df[weight_col] = pd.to_numeric(
         work_df[weight_col], errors="coerce"
     ).fillna(0)
     proj_col = (
         "project_no" if "project_no" in work_df.columns else work_df.columns[2]
     )
-
     pivot = (
         work_df.pivot_table(
             index=proj_col,
@@ -792,33 +736,24 @@ with tab5:
         .reset_index()
         .rename(columns={proj_col: "ProjectNo"})
     )
-
     status_cols = [c for c in pivot.columns if c != "ProjectNo"]
     pivot["Grand Total"] = pivot[status_cols].sum(axis=1)
 
     if not df_o.empty:
       job_col = (
-          "job_number"
-          if "job_number" in df_o.columns
-          else (df_o.columns[1] if len(df_o.columns) > 1 else None)
+          "job_number" if "job_number" in df_o.columns else df_o.columns[1]
       )
       cust_col = (
-          "customer_name"
-          if "customer_name" in df_o.columns
-          else (df_o.columns[2] if len(df_o.columns) > 2 else None)
+          "customer_name" if "customer_name" in df_o.columns else df_o.columns[2]
       )
-
-      if job_col and cust_col:
-        mapping_dict = (
-            df_o.drop_duplicates(subset=[job_col])
-            .set_index(job_col)[cust_col]
-            .to_dict()
-        )
-        pivot["Project Name"] = (
-            pivot["ProjectNo"].astype(str).map(mapping_dict).fillna("N/A")
-        )
-      else:
-        pivot["Project Name"] = "N/A"
+      mapping_dict = (
+          df_o.drop_duplicates(subset=[job_col])
+          .set_index(job_col)[cust_col]
+          .to_dict()
+      )
+      pivot["Project Name"] = (
+          pivot["ProjectNo"].astype(str).map(mapping_dict).fillna("N/A")
+      )
     else:
       pivot["Project Name"] = "N/A"
 
@@ -826,10 +761,8 @@ with tab5:
         c for c in pivot.columns if c not in ["ProjectNo", "Project Name"]
     ]
     pivot = pivot[cols]
-
     numeric_cols = pivot.select_dtypes(include=["number"]).columns
     pivot[numeric_cols] = pivot[numeric_cols].round(3)
-
     if not pivot.empty:
       total_row = {
           col: round(pivot[col].sum(), 3)
@@ -838,102 +771,31 @@ with tab5:
           for col in pivot.columns
       }
       pivot = pd.concat([pivot, pd.DataFrame([total_row])], ignore_index=True)
-
     return work_df, pivot
-
-
-  def style_overall_pivot(df):
-    if df.empty:
-      return df
-    styles = pd.DataFrame("", index=df.index, columns=df.columns)
-
-    if "Grand Total" in df.columns:
-      styles["Grand Total"] = "background-color: #e2f0d9; font-weight: bold;"
-
-    last_idx = df.index[-1]
-    if (
-        "ProjectNo" in df.columns
-        and str(df.loc[last_idx, "ProjectNo"]).strip().upper() == "GRAND TOTAL"
-    ):
-      styles.loc[last_idx, :] = "background-color: #fff2cc; font-weight: bold;"
-
-    return styles
 
 
   raw_pivot_work, overall_pivot = calculate_overall_status_pivot(
       df_master, df_orders
   )
-  if overall_pivot.empty or raw_pivot_work.empty:
-    st.info("No data available for overall status pivot.")
+  if overall_pivot.empty:
+    st.info("No data available for status pivot.")
   else:
     output_pivot = io.BytesIO()
     with pd.ExcelWriter(output_pivot, engine="xlsxwriter") as writer:
       overall_pivot.to_excel(writer, index=False, sheet_name="StatusPivot")
     st.download_button(
-        label="📥 Download Status Pivot Report (.xlsx)",
+        label="📥 Download Status Pivot (.xlsx)",
         data=output_pivot.getvalue(),
         file_name="Overall_Status_Pivot.xlsx",
         mime=(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
     )
-
-    numeric_cols = overall_pivot.select_dtypes(include=["number"]).columns
-    styled_pivot = (
-        overall_pivot.style.apply(style_overall_pivot, axis=None)
-        .format("{:.3f}", subset=numeric_cols)
-    )
-    st.dataframe(styled_pivot, use_container_width=True)
-
-    st.markdown("---")
-    st.markdown("### 🔍 Drill-Down: View Master Mark Numbers by Status")
-    p_col1, p_col2 = st.columns(2)
-    with p_col1:
-      available_p_nos = sorted(
-          raw_pivot_work["project_no"].dropna().astype(str).unique().tolist()
-      )
-      sel_p_no = st.selectbox(
-          "Select Project No", options=available_p_nos, key="pivot_drill_proj"
-      )
-    with p_col2:
-      available_statuses = sorted(
-          raw_pivot_work["status"].dropna().astype(str).unique().tolist()
-      )
-      sel_status = st.selectbox(
-          "Select Status",
-          options=available_statuses,
-          key="pivot_drill_status",
-      )
-
-    drill_pivot_filtered = raw_pivot_work[
-        (raw_pivot_work["project_no"].astype(str) == str(sel_p_no))
-        & (raw_pivot_work["status"].astype(str) == str(sel_status))
-    ]
-    if drill_pivot_filtered.empty:
-      st.info(
-          "No items found for the selected Project and Status combination."
-      )
-    else:
-      st.dataframe(
-          drill_pivot_filtered[[
-              "sr_no",
-              "drawing_no",
-              "element_type",
-              "mark_no",
-              "qty",
-              "draw_total_wt",
-              "contractor",
-              "wip_date",
-              "rfd_date",
-              "dispatch_date",
-          ]],
-          use_container_width=True,
-      )
-
+    st.dataframe(overall_pivot, use_container_width=True)
 
 # --- TAB 6: MILESTONE TRACKER ---
 with tab6:
-  st.subheader("📅 Milestone & Delivery Timeline Tracker (with RFD & WIP Weights)")
+  st.subheader("📅 Milestone & Delivery Timeline Tracker")
   if df_orders.empty:
     st.info("No order backlog data available.")
   else:
@@ -972,15 +834,9 @@ with tab6:
           columns=["project_no", "total_wt", "disp_wt", "rfd_wt", "wip_wt"]
       )
 
-    job_col = (
-        "job_number"
-        if "job_number" in timeline_df.columns
-        else (timeline_df.columns[1] if len(timeline_df.columns) > 1 else None)
-    )
+    job_col = "job_number" if "job_number" in timeline_df.columns else None
     date_col = (
-        "end_delivery_date"
-        if "end_delivery_date" in timeline_df.columns
-        else None
+        "end_delivery_date" if "end_delivery_date" in timeline_df.columns else None
     )
 
     if job_col and date_col and not m_summary.empty:
@@ -994,12 +850,6 @@ with tab6:
       timeline_df["disp_wt"] = 0.0
       timeline_df["rfd_wt"] = 0.0
       timeline_df["wip_wt"] = 0.0
-
-    for wt_col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt", "po_rate"]:
-      if wt_col in timeline_df.columns:
-        timeline_df[wt_col] = pd.to_numeric(
-            timeline_df[wt_col], errors="coerce"
-        ).round(3 if "wt" in wt_col else 2)
 
 
     def evaluate_milestone(row):
@@ -1027,78 +877,36 @@ with tab6:
           evaluate_milestone, axis=1
       )
 
-    status_filter = st.selectbox(
-        "Filter by Delivery Status",
-        options=[
-            "All",
-            "Overdue",
-            "Due in 30 Days",
-            "On Track",
-            "Completed",
-            "No Date Set",
-        ],
-    )
-    if status_filter != "All":
-      timeline_df = timeline_df[
-          timeline_df["Milestone Status"] == status_filter
-      ]
+
+    def style_milestone_cell(val):
+      if val == "Overdue":
+        return "background-color: #f8cecc; font-weight: bold; color: #a94442;"
+      elif val == "Due in 30 Days":
+        return "background-color: #fff2cc; font-weight: bold; color: #8a6d3b;"
+      elif val == "Completed":
+        return "background-color: #e2f0d9; font-weight: bold; color: #3c763d;"
+      return ""
 
 
-    def style_timeline(df):
-      if df.empty or "Milestone Status" not in df.columns:
-        return df
-      styles = pd.DataFrame("", index=df.index, columns=df.columns)
-      for idx, val in df["Milestone Status"].items():
-        if val == "Overdue":
-          styles.loc[idx, "Milestone Status"] = (
-              "background-color: #f8cecc; font-weight: bold; color: #a94442;"
-          )
-        elif val == "Due in 30 Days":
-          styles.loc[idx, "Milestone Status"] = (
-              "background-color: #fff2cc; font-weight: bold; color: #8a6d3b;"
-          )
-        elif val == "Completed":
-          styles.loc[idx, "Milestone Status"] = (
-              "background-color: #e2f0d9; font-weight: bold; color: #3c763d;"
-          )
-      return styles
-
-
-    timeline_configs = {}
-    for col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt"]:
-      if col in timeline_df.columns:
-        timeline_configs[col] = st.column_config.NumberColumn(
-            label=col.replace("_", " ").upper(), format="%.3f MT"
-        )
-    if "po_rate" in timeline_df.columns:
-      timeline_configs["po_rate"] = st.column_config.NumberColumn(
-          label="PO Rate (INR)", format="₹ %.2f"
+    if "Milestone Status" in timeline_df.columns:
+      styled_timeline = timeline_df.style.map(
+          style_milestone_cell, subset=["Milestone Status"]
       )
+    else:
+      styled_timeline = timeline_df.style
+    st.dataframe(styled_timeline, use_container_width=True)
 
-    st.dataframe(
-        timeline_df.style.apply(style_timeline, axis=None),
-        column_config=timeline_configs,
-        use_container_width=True,
-    )
-
-
-# --- TAB 7: CONTRACTOR PERFORMANCE TRACKER ---
+# --- TAB 7: CONTRACTOR PERFORMANCE ---
 with tab7:
   st.subheader("👷 Contractor Performance & Shop-Floor Productivity")
-  st.markdown(
-      "Analyzing total executed tonnage, output status, and workload distribution"
-      " by contractor."
-  )
-
   if df_master.empty or "contractor" not in df_master.columns:
-    st.info("No contractor data available in master sheet.")
+    st.info("No contractor data available.")
   else:
     c_df = df_master.copy()
     c_df["contractor"] = c_df["contractor"].fillna("Unassigned").astype(str)
     c_df["draw_total_wt"] = pd.to_numeric(
         c_df["draw_total_wt"], errors="coerce"
     ).fillna(0)
-
     contractor_summary = (
         c_df.groupby("contractor")
         .agg(
@@ -1120,43 +928,20 @@ with tab7:
         )
         .reset_index()
     )
-
-    contractor_summary["Total_Weight"] = contractor_summary[
-        "Total_Weight"
-    ].round(3)
-    contractor_summary["Dispatched_Weight"] = contractor_summary[
-        "Dispatched_Weight"
-    ].round(3)
-    contractor_summary["Active_WIP_Weight"] = contractor_summary[
-        "Active_WIP_Weight"
-    ].round(3)
-
-    st.dataframe(contractor_summary, use_container_width=True)
-
-    fig_contractor = px.bar(
-        contractor_summary,
-        x="contractor",
-        y=["Dispatched_Weight", "Active_WIP_Weight"],
-        title="Tonnage Output by Contractor",
-        labels={
-            "value": "Weight (MT)",
-            "contractor": "Contractor Name",
-            "variable": "Status Category",
-        },
-        barmode="group",
+    contractor_summary[["Total_Weight", "Dispatched_Weight", "Active_WIP_Weight"]] = (
+        contractor_summary[
+            ["Total_Weight", "Dispatched_Weight", "Active_WIP_Weight"]
+        ].round(3)
     )
-    st.plotly_chart(fig_contractor, use_container_width=True)
-
+    st.dataframe(contractor_summary, use_container_width=True)
 
 # --- TAB 8: VISUAL ANALYTICS & CHARTS ---
 with tab8:
   st.subheader("📈 Visual Analytics & Shop-Floor Charts (Plotly)")
-
   if df_master.empty:
     st.info("No data available for charts.")
   else:
     c1, c2 = st.columns(2)
-
     with c1:
       status_counts = (
           df_master.groupby("status")["draw_total_wt"].sum().reset_index()
@@ -1165,11 +950,10 @@ with tab8:
           status_counts,
           names="status",
           values="draw_total_wt",
-          title="Total Weight Distribution by Status (MT)",
+          title="Weight Distribution by Status (MT)",
           hole=0.4,
       )
       st.plotly_chart(fig_pie, use_container_width=True)
-
     with c2:
       proj_counts = (
           df_master.groupby("project_no")["draw_total_wt"]
@@ -1180,151 +964,112 @@ with tab8:
           proj_counts,
           x="project_no",
           y="draw_total_wt",
-          title="Total Master Tonnage per Project No (MT)",
-          labels={
-              "project_no": "Project Number",
-              "draw_total_wt": "Weight (MT)",
-          },
-          color="draw_total_wt",
-          color_continuous_scale="Blues",
+          title="Total Tonnage per Project (MT)",
       )
       st.plotly_chart(fig_bar, use_container_width=True)
 
-    if "plant" in df_master.columns:
-      st.markdown("---")
-      plant_counts = (
-          df_master.groupby(["plant", "status"])["draw_total_wt"]
-          .sum()
-          .reset_index()
-      )
-      fig_plant = px.bar(
-          plant_counts,
-          x="plant",
-          y="draw_total_wt",
-          color="status",
-          title="Tonnage Output Breakdown by Plant / Workshop Bay (MT)",
-          barmode="stack",
-          labels={"plant": "Plant / Bay", "draw_total_wt": "Weight (MT)"},
-      )
-      st.plotly_chart(fig_plant, use_container_width=True)
-
-
 # --- TAB 9: MONTHLY RFD & DISPATCH PERFORMANCE ---
 with tab9:
-    st.subheader(
-        "📅 Monthly RFD & Dispatch Performance (Project & Contractor Wise)"
-    )
-    st.markdown(
-        "Select a target month to review specific RFD and Dispatch output."
-    )
+  st.subheader(
+      "📅 Monthly RFD & Dispatch Performance (Project & Contractor Wise)"
+  )
+  if df_master.empty:
+    st.info("No master data available.")
+  else:
+    m_df = df_master.copy()
+    m_df["rfd_dt"] = pd.to_datetime(m_df["rfd_date"], errors="coerce")
+    m_df["dispatch_dt"] = pd.to_datetime(m_df["dispatch_date"], errors="coerce")
+    rfd_months = m_df["rfd_dt"].dt.strftime("%Y-%m").dropna().unique()
+    disp_months = m_df["dispatch_dt"].dt.strftime("%Y-%m").dropna().unique()
+    all_months = sorted(list(set(rfd_months) | set(disp_months)))
+    current_ym = pd.Timestamp.today().strftime("%Y-%m")
 
-    if df_master.empty:
-        st.info("No master data available.")
+    if not all_months:
+      st.info("No RFD or Dispatch date records found.")
     else:
-        m_df = df_master.copy()
-        m_df["rfd_dt"] = pd.to_datetime(m_df["rfd_date"], errors="coerce")
-        m_df["dispatch_dt"] = pd.to_datetime(m_df["dispatch_date"], errors="coerce")
+      default_ix = (
+          all_months.index(current_ym)
+          if current_ym in all_months
+          else len(all_months) - 1
+      )
+      selected_month = st.selectbox(
+          "Filter by Month (YYYY-MM)", options=all_months, index=default_ix
+      )
 
-        rfd_months = m_df["rfd_dt"].dt.strftime("%Y-%m").dropna().unique()
-        disp_months = m_df["dispatch_dt"].dt.strftime("%Y-%m").dropna().unique()
-        all_months = sorted(list(set(rfd_months) | set(disp_months)))
+      rfd_filtered = m_df[m_df["rfd_dt"].dt.strftime("%Y-%m") == selected_month]
+      disp_filtered = m_df[
+          m_df["dispatch_dt"].dt.strftime("%Y-%m") == selected_month
+      ]
 
-        current_ym = pd.Timestamp.today().strftime("%Y-%m")
+      st.markdown(f"### 📁 Project-Wise Summary for {selected_month}")
+      proj_rfd = (
+          rfd_filtered.groupby("project_no")["draw_total_wt"]
+          .sum()
+          .reset_index()
+          .rename(columns={"draw_total_wt": "RFD_Weight_MT"})
+      )
+      proj_disp = (
+          disp_filtered.groupby("project_no")["draw_total_wt"]
+          .sum()
+          .reset_index()
+          .rename(columns={"draw_total_wt": "Dispatch_Weight_MT"})
+      )
+      proj_merged = pd.merge(
+          proj_rfd, proj_disp, on="project_no", how="outer"
+      ).fillna(0)
 
-        if not all_months:
-            st.info("No RFD or Dispatch date records found in the Master Sheet.")
+      if proj_merged.empty or "project_no" not in proj_merged.columns:
+        st.info(f"No project data recorded for {selected_month}.")
+      else:
+        proj_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = proj_merged[
+            ["RFD_Weight_MT", "Dispatch_Weight_MT"]
+        ].round(3)
+        total_proj_rfd = round(proj_merged["RFD_Weight_MT"].sum(), 3)
+        total_proj_disp = round(proj_merged["Dispatch_Weight_MT"].sum(), 3)
+        proj_total_row = pd.DataFrame([{
+            "project_no": "GRAND TOTAL",
+            "RFD_Weight_MT": total_proj_rfd,
+            "Dispatch_Weight_MT": total_proj_disp,
+        }])
+        proj_merged = pd.concat(
+            [proj_merged, proj_total_row], ignore_index=True
+        )
+        st.dataframe(proj_merged, use_container_width=True)
+
+      st.markdown("---")
+      st.markdown(f"### 👷 Contractor-Wise Summary for {selected_month}")
+      con_col = "contractor" if "contractor" in m_df.columns else "Contractor"
+      if con_col in m_df.columns:
+        con_rfd = (
+            rfd_filtered.groupby(con_col)["draw_total_wt"]
+            .sum()
+            .reset_index()
+            .rename(columns={"draw_total_wt": "RFD_Weight_MT"})
+        )
+        con_disp = (
+            disp_filtered.groupby(con_col)["draw_total_wt"]
+            .sum()
+            .reset_index()
+            .rename(columns={"draw_total_wt": "Dispatch_Weight_MT"})
+        )
+        con_merged = pd.merge(con_rfd, con_disp, on=con_col, how="outer").fillna(
+            0
+        )
+
+        if con_merged.empty or con_col not in con_merged.columns:
+          st.info(f"No contractor data recorded for {selected_month}.")
         else:
-            default_ix = (
-                all_months.index(current_ym)
-                if current_ym in all_months
-                else len(all_months) - 1
-            )
-            selected_month = st.selectbox(
-                "Filter by Month (YYYY-MM)",
-                options=all_months,
-                index=default_ix,
-                key="monthly_perf_filter",
-            )
-
-            rfd_filtered = m_df[m_df["rfd_dt"].dt.strftime("%Y-%m") == selected_month]
-            disp_filtered = m_df[
-                m_df["dispatch_dt"].dt.strftime("%Y-%m") == selected_month
-            ]
-
-            st.markdown(f"### 📁 Project-Wise Summary for {selected_month}")
-            proj_rfd = (
-                rfd_filtered.groupby("project_no")["draw_total_wt"]
-                .sum()
-                .reset_index()
-                .rename(columns={"draw_total_wt": "RFD_Weight_MT"})
-            )
-            proj_disp = (
-                disp_filtered.groupby("project_no")["draw_total_wt"]
-                .sum()
-                .reset_index()
-                .rename(columns={"draw_total_wt": "Dispatch_Weight_MT"})
-            )
-
-            proj_merged = pd.merge(
-                proj_rfd, proj_disp, on="project_no", how="outer"
-            ).fillna(0)
-
-            # Safeguard check to ensure columns exist before rounding or modifying
-            if proj_merged.empty or "project_no" not in proj_merged.columns:
-                st.info(f"No project data recorded for RFD or Dispatch in {selected_month}.")
-            else:
-                if "RFD_Weight_MT" in proj_merged.columns and "Dispatch_Weight_MT" in proj_merged.columns:
-                    proj_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = proj_merged[
-                        ["RFD_Weight_MT", "Dispatch_Weight_MT"]
-                    ].round(3)
-
-                # Add Project-Wise Grand Total Row
-                total_proj_rfd = round(proj_merged["RFD_Weight_MT"].sum(), 3)
-                total_proj_disp = round(proj_merged["Dispatch_Weight_MT"].sum(), 3)
-                proj_total_row = pd.DataFrame([{
-                    "project_no": "GRAND TOTAL",
-                    "RFD_Weight_MT": total_proj_rfd,
-                    "Dispatch_Weight_MT": total_proj_disp
-                }])
-                proj_merged = pd.concat([proj_merged, proj_total_row], ignore_index=True)
-
-                st.dataframe(proj_merged, use_container_width=True)
-
-            st.markdown("---")
-            st.markdown(f"### 👷 Contractor-Wise Summary for {selected_month}")
-            con_col = "contractor" if "contractor" in m_df.columns else "Contractor"
-            if con_col in m_df.columns:
-                con_rfd = (
-                    rfd_filtered.groupby(con_col)["draw_total_wt"]
-                    .sum()
-                    .reset_index()
-                    .rename(columns={"draw_total_wt": "RFD_Weight_MT"})
-                )
-                con_disp = (
-                    disp_filtered.groupby(con_col)["draw_total_wt"]
-                    .sum()
-                    .reset_index()
-                    .rename(columns={"draw_total_wt": "Dispatch_Weight_MT"})
-                )
-
-                con_merged = pd.merge(con_rfd, con_disp, on=con_col, how="outer").fillna(0)
-
-                if con_merged.empty or con_col not in con_merged.columns:
-                    st.info(f"No contractor data recorded for RFD or Dispatch in {selected_month}.")
-                else:
-                    if "RFD_Weight_MT" in con_merged.columns and "Dispatch_Weight_MT" in con_merged.columns:
-                        con_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = con_merged[
-                            ["RFD_Weight_MT", "Dispatch_Weight_MT"]
-                        ].round(3)
-
-                    # Add Contractor-Wise Grand Total Row
-                    total_con_rfd = round(con_merged["RFD_Weight_MT"].sum(), 3)
-                    total_con_disp = round(con_merged["Dispatch_Weight_MT"].sum(), 3)
-                    con_total_row = pd.DataFrame([{
-                        con_col: "GRAND TOTAL",
-                        "RFD_Weight_MT": total_con_rfd,
-                        "Dispatch_Weight_MT": total_con_disp
-                    }])
-                    con_merged = pd.concat([con_merged, con_total_row], ignore_index=True)
-
-                    st.dataframe(con_merged, use_container_width=True)
+          con_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = con_merged[
+              ["RFD_Weight_MT", "Dispatch_Weight_MT"]
+          ].round(3)
+          total_con_rfd = round(con_merged["RFD_Weight_MT"].sum(), 3)
+          total_con_disp = round(con_merged["Dispatch_Weight_MT"].sum(), 3)
+          con_total_row = pd.DataFrame([{
+              con_col: "GRAND TOTAL",
+              "RFD_Weight_MT": total_con_rfd,
+              "Dispatch_Weight_MT": total_con_disp,
+          }])
+          con_merged = pd.concat(
+              [con_merged, con_total_row], ignore_index=True
+          )
+          st.dataframe(con_merged, use_container_width=True)
