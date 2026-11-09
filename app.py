@@ -793,6 +793,20 @@ with tab5:
     )
     st.dataframe(overall_pivot, use_container_width=True)
 
+# --- CUSTOM CSS FOR TABLE HEADERS (Wrapped & Centered) ---
+st.markdown(
+    """
+    <style>
+    div[data-testid="stDataFrame"] th {
+        text-align: center !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # --- TAB 6: MILESTONE TRACKER ---
 with tab6:
   st.subheader("📅 Milestone & Delivery Timeline Tracker")
@@ -851,13 +865,13 @@ with tab6:
       timeline_df["rfd_wt"] = 0.0
       timeline_df["wip_wt"] = 0.0
 
-    # Round weight columns to whole numbers (integers)
+    # Convert weights to whole numbers (integers)
     for wt_col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt"]:
       if wt_col in timeline_df.columns:
         timeline_df[wt_col] = (
             pd.to_numeric(timeline_df[wt_col], errors="coerce")
             .fillna(0)
-            .round()
+            .round(0)
             .astype(int)
         )
 
@@ -905,13 +919,13 @@ with tab6:
     else:
       styled_timeline = timeline_df.style
 
-    # Configure whole number formatting and move (MT) into headers
+    # Configure headers with (MT) and whole number formatting (`%d`)
     timeline_configs = {}
     for col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt"]:
       if col in timeline_df.columns:
-        label_text = f"{col.replace('_', ' ').upper()} (MT)"
+        clean_label = col.replace("_", " ").upper()
         timeline_configs[col] = st.column_config.NumberColumn(
-            label=label_text, format="%,d"
+            label=f"{clean_label} (MT)", format="%d"
         )
     if "po_rate" in timeline_df.columns:
       timeline_configs["po_rate"] = st.column_config.NumberColumn(
@@ -923,7 +937,6 @@ with tab6:
         column_config=timeline_configs,
         use_container_width=True,
     )
-
 # --- TAB 7: CONTRACTOR PERFORMANCE ---
 with tab7:
   st.subheader("👷 Contractor Performance & Shop-Floor Productivity")
