@@ -851,6 +851,13 @@ with tab6:
       timeline_df["rfd_wt"] = 0.0
       timeline_df["wip_wt"] = 0.0
 
+    # Ensure numeric columns are rounded to 3 decimal places
+    for wt_col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt"]:
+      if wt_col in timeline_df.columns:
+        timeline_df[wt_col] = pd.to_numeric(
+            timeline_df[wt_col], errors="coerce"
+        ).round(3)
+
 
     def evaluate_milestone(row):
       d_str = str(row.get(date_col, ""))
@@ -894,7 +901,24 @@ with tab6:
       )
     else:
       styled_timeline = timeline_df.style
-    st.dataframe(styled_timeline, use_container_width=True)
+
+    # Configure column formatting for clean 3-decimal displays
+    timeline_configs = {}
+    for col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt"]:
+      if col in timeline_df.columns:
+        timeline_configs[col] = st.column_config.NumberColumn(
+            label=col.replace("_", " ").upper(), format="%.3f MT"
+        )
+    if "po_rate" in timeline_df.columns:
+      timeline_configs["po_rate"] = st.column_config.NumberColumn(
+          label="PO Rate (INR)", format="₹ %.2f"
+      )
+
+    st.dataframe(
+        styled_timeline,
+        column_config=timeline_configs,
+        use_container_width=True,
+    )
 
 # --- TAB 7: CONTRACTOR PERFORMANCE ---
 with tab7:
