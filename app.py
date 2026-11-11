@@ -3,31 +3,31 @@ import streamlit as st
 
 # --- PAGE CONFIGURATION (WIDE LAYOUT) ---
 st.set_page_config(
-    page_title="Mommy & Baby Animal Match", page_icon="🐾", layout="wide"
+    page_title="Toddler Animal Match Game", page_icon="🐾", layout="wide"
 )
 
-# --- CUSTOM CSS FOR BIGGER, TODDLER-FRIENDLY BUTTONS & WIDER SCREEN ---
+# --- CUSTOM CSS FOR LARGE TODDLER TOUCH TARGETS ---
 st.markdown(
     """
     <style>
     .stButton>button {
-        font-size: 26px !important;
-        padding: 28px !important;
-        border-radius: 20px !important;
+        font-size: 22px !important;
+        padding: 22px !important;
+        border-radius: 18px !important;
         font-weight: bold;
         width: 100%;
-        box-shadow: 0px 4px 8px rgba(0,0,0,0.15);
+        box-shadow: 0px 4px 6px rgba(0,0,0,0.1);
     }
-    .big-title {
-        font-size: 3em !important;
+    .title-text {
         text-align: center;
-        color: #2e7d32;
+        color: #d81b60;
+        font-size: 2.8em !important;
         font-weight: bold;
     }
-    .instruction-text {
-        font-size: 1.6em !important;
+    .instruction {
         text-align: center;
-        color: #444;
+        font-size: 1.5em !important;
+        color: #333;
     }
     </style>
     """,
@@ -62,135 +62,108 @@ if not st.session_state.authenticated:
 
 # --- 10 ANIMAL PAIRS DATABASE ---
 ANIMAL_PAIRS = [
-    {"baby": "Puppy 🐶", "mommy": "Dog 🐕"},
-    {"baby": "Kitten 🐱", "mommy": "Cat 🐈"},
-    {"baby": "Calf 🐮", "mommy": "Cow 🐄"},
-    {"baby": "Chick 🐥", "mommy": "Chicken 🐔"},
-    {"baby": "Piglet 🐷", "mommy": "Pig 🐖"},
-    {"baby": "Duckling 🦆", "mommy": "Duck 🦆"},
-    {"baby": "Foal 🐴", "mommy": "Horse 🐎"},
-    {"baby": "Lamb 🐑", "mommy": "Sheep 🐏"},
-    {"baby": "Kid 🐐", "mommy": "Goat 🐐"},
-    {"baby": "Cub 🦁", "mommy": "Lion 🦁"},
+    {"baby": "Puppy 🐶", "mommy": "Dog 🐕", "id": 1},
+    {"baby": "Kitten 🐱", "mommy": "Cat 🐈", "id": 2},
+    {"baby": "Calf 🐮", "mommy": "Cow 🐄", "id": 3},
+    {"baby": "Chick 🐥", "mommy": "Chicken 🐔", "id": 4},
+    {"baby": "Piglet 🐷", "mommy": "Pig 🐖", "id": 5},
+    {"baby": "Duckling 🦆", "mommy": "Duck 🦆", "id": 6},
+    {"baby": "Foal 🐴", "mommy": "Horse 🐎", "id": 7},
+    {"baby": "Lamb 🐑", "mommy": "Sheep 🐏", "id": 8},
+    {"baby": "Kid 🐐", "mommy": "Goat 🐐", "id": 9},
+    {"baby": "Cub 🦁", "mommy": "Lion 🦁", "id": 10},
 ]
 
-# Initialize Session State
-if "match_score" not in st.session_state:
-    st.session_state.match_score = 0
-if "current_pair" not in st.session_state:
-    st.session_state.current_pair = random.choice(ANIMAL_PAIRS)
-    all_mommies = [p["mommy"] for p in ANIMAL_PAIRS]
-    correct_mommy = st.session_state.current_pair["mommy"]
-    other_mommies = [m for m in all_mommies if m != correct_mommy]
-    options = random.sample(other_mommies, 3) + [correct_mommy]
-    random.shuffle(options)
-    st.session_state.current_options = options
+# Initialize Session State for Active Round
+if "score" not in st.session_state:
+    st.session_state.score = 0
+if "selected_baby" not in st.session_state:
+    st.session_state.selected_baby = None
+if "round_animals" not in st.session_state:
+    # Pick 4 random pairs for the current board
+    selected = random.sample(ANIMAL_PAIRS, 4)
+    st.session_state.babies_round = selected.copy()
+    random.shuffle(st.session_state.babies_round)
+    st.session_state.mommies_round = selected.copy()
+    random.shuffle(st.session_state.mommies_round)
 
 # --- MAIN APP UI ---
 st.markdown(
-    "<h1 class='big-title'>🐾 Mommy & Baby Animal Matching Game 🐾</h1>",
+    "<h1 class='title-text'>🐾 Match Baby to Mommy! 🐾</h1>",
     unsafe_allow_html=True,
 )
 st.markdown(
-    "<p class='instruction-text'>Can you match the cute baby with its Mommy?</p>",
+    "<p class='instruction'><b>Step 1:</b> Click a Baby Animal on the left. <br><b>Step 2:</b> Click its Mommy on the right to match them!</p>",
     unsafe_allow_html=True,
 )
 st.markdown("---")
 
-current = st.session_state.current_pair
+col_left, col_center, col_right = st.columns([2, 1, 2])
 
-# Display Baby Animal Banner
-st.markdown(
-    f"<div style='text-align: center; padding: 30px; background-color: #e8f5e9; border-radius: 20px; margin-bottom: 30px;'>"
-    f"<h2 style='color: #1b5e20; font-size: 2.2em;'>Baby: <b>{current['baby']}</b></h2>"
-    f"<h3 style='color: #388e3c;'>Who is the Mommy? 🤔</h3>"
-    f"</div>",
-    unsafe_allow_html=True,
-)
-
-# 4 Interactive Big Choice Buttons in a 2x2 Grid
-options = st.session_state.current_options
-col1, col2 = st.columns(2)
-
-with col1:
-    if st.button(options[0], key="opt_0"):
-        if options[0] == current["mommy"]:
-            st.balloons()
-            st.success(f"🎉 Yay! The Mommy of the {current['baby']} is the {options[0]}!")
-            st.session_state.match_score += 1
-            st.session_state.current_pair = random.choice(ANIMAL_PAIRS)
-            all_mommies = [p["mommy"] for p in ANIMAL_PAIRS]
-            correct_mommy = st.session_state.current_pair["mommy"]
-            other_mommies = [m for m in all_mommies if m != correct_mommy]
-            new_opts = random.sample(other_mommies, 3) + [correct_mommy]
-            random.shuffle(new_opts)
-            st.session_state.current_options = new_opts
+# --- LEFT COLUMN: BABY ANIMALS ---
+with col_left:
+    st.markdown("<h3 style='text-align: center;'>👶 Baby Animals</h3>", unsafe_allow_html=True)
+    for animal in st.session_state.babies_round:
+        # Highlight if selected
+        is_selected = st.session_state.selected_baby == animal["id"]
+        btn_label = f"✨ {animal['baby']} ✨" if is_selected else animal["baby"]
+        
+        if st.button(btn_label, key=f"baby_{animal['id']}"):
+            st.session_state.selected_baby = animal["id"]
             st.rerun()
-        else:
-            st.error("❌ Oops! Try another Mommy.")
 
-    if st.button(options[1], key="opt_1"):
-        if options[1] == current["mommy"]:
-            st.balloons()
-            st.success(f"🎉 Yay! The Mommy of the {current['baby']} is the {options[1]}!")
-            st.session_state.match_score += 1
-            st.session_state.current_pair = random.choice(ANIMAL_PAIRS)
-            all_mommies = [p["mommy"] for p in ANIMAL_PAIRS]
-            correct_mommy = st.session_state.current_pair["mommy"]
-            other_mommies = [m for m in all_mommies if m != correct_mommy]
-            new_opts = random.sample(other_mommies, 3) + [correct_mommy]
-            random.shuffle(new_opts)
-            st.session_state.current_options = new_opts
-            st.rerun()
-        else:
-            st.error("❌ Oops! Try another Mommy.")
-
-with col2:
-    if st.button(options[2], key="opt_2"):
-        if options[2] == current["mommy"]:
-            st.balloons()
-            st.success(f"🎉 Yay! The Mommy of the {current['baby']} is the {options[2]}!")
-            st.session_state.match_score += 1
-            st.session_state.current_pair = random.choice(ANIMAL_PAIRS)
-            all_mommies = [p["mommy"] for p in ANIMAL_PAIRS]
-            correct_mommy = st.session_state.current_pair["mommy"]
-            other_mommies = [m for m in all_mommies if m != correct_mommy]
-            new_opts = random.sample(other_mommies, 3) + [correct_mommy]
-            random.shuffle(new_opts)
-            st.session_state.current_options = new_opts
-            st.rerun()
-        else:
-            st.error("❌ Oops! Try another Mommy.")
-
-    if st.button(options[3], key="opt_3"):
-        if options[3] == current["mommy"]:
-            st.balloons()
-            st.success(f"🎉 Yay! The Mommy of the {current['baby']} is the {options[3]}!")
-            st.session_state.match_score += 1
-            st.session_state.current_pair = random.choice(ANIMAL_PAIRS)
-            all_mommies = [p["mommy"] for p in ANIMAL_PAIRS]
-            correct_mommy = st.session_state.current_pair["mommy"]
-            other_mommies = [m for m in all_mommies if m != correct_mommy]
-            new_opts = random.sample(other_mommies, 3) + [correct_mommy]
-            random.shuffle(new_opts)
-            st.session_state.current_options = new_opts
-            st.rerun()
-        else:
-            st.error("❌ Oops! Try another Mommy.")
-
-# Scoreboard & Reset
-st.markdown("---")
-st.markdown(f"<h3 style='text-align: center;'>🏆 Correct Matches Score: {st.session_state.match_score}</h3>", unsafe_allow_html=True)
-
-col_r1, col_r2, col_r3 = st.columns([1, 2, 1])
-with col_r2:
-    if st.button("🔄 Reset Score"):
-        st.session_state.match_score = 0
+# --- CENTER COLUMN: STATUS & FEEDBACK ---
+with col_center:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    if st.session_state.selected_baby:
+        active_baby = next(a for a in st.session_state.babies_round if a["id"] == st.session_state.selected_baby)
+        st.markdown(
+            f"<div style='text-align: center; background-color: #fff3cd; padding: 15px; border-radius: 12px; border: 2px dashed orange;'>"
+            f"<h4>Selected Baby:</h4>"
+            f"<h2>{active_baby['baby']}</h2>"
+            f"<p>Now click the matching Mommy! 👉</p>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f"<div style='text-align: center; background-color: #e2e3e5; padding: 15px; border-radius: 12px;'>"
+            f"<h4>Score: 🏆 {st.session_state.score}</h4>"
+            f"<p>Tap a baby animal first!</p>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("🔄 New Board"):
+        selected = random.sample(ANIMAL_PAIRS, 4)
+        st.session_state.babies_round = selected.copy()
+        random.shuffle(st.session_state.babies_round)
+        st.session_state.mommies_round = selected.copy()
+        random.shuffle(st.session_state.mommies_round)
+        st.session_state.selected_baby = None
         st.rerun()
 
-# --- FOOTER ---
-st.markdown("---")
-st.markdown(
-    "<p style='text-align: center; color: gray;'>Made with ❤️ for Toddler Fun | Streamlit Touch Arcade</p>",
-    unsafe_allow_html=True,
-)
+# --- RIGHT COLUMN: MOMMY ANIMALS ---
+with col_right:
+    st.markdown("<h3 style='text-align: center;'>👩‍👧 Mommy Animals</h3>", unsafe_allow_html=True)
+    for animal in st.session_state.mommies_round:
+        if st.button(animal["mommy"], key=f"mommy_{animal['id']}"):
+            if st.session_state.selected_baby is None:
+                st.warning("⚠️ Please select a Baby Animal first!")
+            else:
+                # Check if correct match
+                if st.session_state.selected_baby == animal["id"]:
+                    st.balloons()
+                    st.success(f"🎉 Correct! You matched the {animal['mommy']} with her baby!")
+                    st.session_state.score += 1
+                    st.session_state.selected_baby = None
+                    
+                    # Remove matched pair and load next or refresh board if empty
+                    st.session_state.babies_round = [a for a in st.session_state.babies_round if a["id"] != animal["id"]]
+                    st.session_state.mommies_round = [a for a in st.session_state.mommies_round if a["id"] != animal["id"]]
+                    
+                    if not st.session_state.babies_round:
+                        st.success("🌟 Amazing! You matched all animals on this board!")
+                        selected = random.sample(ANIMAL_PAIRS, 4)
+                        st.
