@@ -284,7 +284,7 @@ def save_orders_to_db(df):
 df_master, df_orders = load_data_from_db()
 df_master = calculate_automatic_status(df_master)
 
-# --- SIDEBAR: USER INFO & BACKUP RESTORE (Safe Session Check) ---
+# --- SIDEBAR: USER INFO & BACKUP RESTORE ---
 logged_in_user = st.session_state.get("username", "Admin")
 st.sidebar.markdown(f"👤 **Logged in as:** `{logged_in_user}`")
 if st.sidebar.button("🚪 Sign Out"):
@@ -578,7 +578,7 @@ with tab2:
     st.rerun()
 
 
-# --- HELPER: AGEING REPORT ---
+# --- HELPER: AGEING REPORT (Fixed TOTAL row & Whole Numbers) ---
 def get_ageing_detail_df(df, status_val, date_col, weight_col="draw_total_wt"):
   empty_rep = pd.DataFrame(
       columns=[
@@ -621,6 +621,7 @@ def get_ageing_detail_df(df, status_val, date_col, weight_col="draw_total_wt"):
       work_df[weight_col], errors="coerce"
   ).fillna(0)
   proj_col = "project_no" if "project_no" in work_df.columns else work_df.columns[2]
+
   pivot = (
       work_df.pivot_table(
           index=proj_col,
@@ -632,22 +633,35 @@ def get_ageing_detail_df(df, status_val, date_col, weight_col="draw_total_wt"):
       .reset_index()
       .rename(columns={proj_col: "ProjectNo"})
   )
+
+  # Ensure ProjectNo is string to prevent total row value overrides
+  pivot["ProjectNo"] = pivot["ProjectNo"].astype(str)
+
   bucket_cols = ["0-7 Days", "8-15 Days", "16-30 Days", "30-60 Days", ">60 Days"]
   for c in bucket_cols:
     if c not in pivot.columns:
       pivot[c] = 0.0
   pivot["Total Weight"] = pivot[bucket_cols].sum(axis=1)
-  final_df = pivot[["ProjectNo"] + bucket_cols + ["Total Weight"]]
+  final_df = pivot[["ProjectNo"] + bucket_cols + ["Total Weight"]].copy()
+
   numeric_cols = final_df.select_dtypes(include=["number"]).columns
-  final_df[numeric_cols] = final_df[numeric_cols].round(3)
+  # Round to whole numbers (integers)
+  final_df[numeric_cols] = (
+      final_df[numeric_cols].round(0).fillna(0).astype(int)
+  )
+
   if not final_df.empty:
     total_row = {
-        col: round(final_df[col].sum(), 3)
+        col: int(round(final_df[col].sum(), 0))
         if col in numeric_cols
         else ("TOTAL" if col == "ProjectNo" else "")
         for col in final_df.columns
     }
-    final_df = pd.concat([final_df, pd.DataFrame([total_row])], ignore_index=True)
+    total_df = pd.DataFrame([total_row])
+    total_df["ProjectNo"] = total_df["ProjectNo"].astype(str)
+    final_df["ProjectNo"] = final_df["ProjectNo"].astype(str)
+    final_df = pd.concat([final_df, total_df], ignore_index=True)
+
   return work_df, final_df
 
 
@@ -684,11 +698,26 @@ with tab3:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
     )
-    numeric_cols = wip_rep.select_dtypes(include=["number"]).columns
-    styled_wip = wip_rep.style.apply(
-        style_ageing_report, axis=None
-    ).format("{:.3f}", subset=numeric_cols)
-    st.dataframe(styled_wip, use_container_width=True)
+
+    # Configure headers with (MT) and whole number format
+    wip_configs = {"ProjectNo": st.column_config.TextColumn(label="Project No")}
+    for col in [
+        "0-7 Days",
+        "8-15 Days",
+        "16-30 Days",
+        "30-60 Days",
+        ">60 Days",
+        "Total Weight",
+    ]:
+      if col in wip_rep.columns:
+        wip_configs[col] = st.column_config.NumberColumn(
+            label=f"{col} (MT)", format="%d"
+        )
+
+    styled_wip = wip_rep.style.apply(style_ageing_report, axis=None)
+    st.dataframe(
+        styled_wip, column_config=wip_configs, use_container_width=True
+    )
 
 # --- TAB 4: RFD AGEING REPORT ---
 with tab4:
@@ -708,11 +737,25 @@ with tab4:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
     )
-    numeric_cols = rfd_rep.select_dtypes(include=["number"]).columns
-    styled_rfd = rfd_rep.style.apply(
-        style_ageing_report, axis=None
-    ).format("{:.3f}", subset=numeric_cols)
-    st.dataframe(styled_rfd, use_container_width=True)
+
+    rfd_configs = {"ProjectNo": st.column_config.TextColumn(label="Project No")}
+    for col in [
+        "0-7 Days",
+        "8-15 Days",
+        "16-30 Days",
+        "30-60 Days",
+        ">60 Days",
+        "Total Weight",
+    ]:
+      if col in rfd_rep.columns:
+        rfd_configs[col] = st.column_config.NumberColumn(
+            label=f"{col} (MT)", format="%d"
+        )
+
+    styled_rfd = rfd_rep.style.apply(style_ageing_report, axis=None)
+    st.dataframe(
+        styled_rfd, column_config=rfd_configs, use_container_width=True
+    )
 
 # --- TAB 5: OVERALL PROJECT STATUS PIVOT ---
 with tab5:
@@ -742,6 +785,7 @@ with tab5:
         .reset_index()
         .rename(columns={proj_col: "ProjectNo"})
     )
+    pivot["ProjectNo"] = pivot["ProjectNo"].astype(str)
     status_cols = [c for c in pivot.columns if c != "ProjectNo"]
     pivot["Grand Total"] = pivot[status_cols].sum(axis=1)
 
@@ -768,15 +812,21 @@ with tab5:
     ]
     pivot = pivot[cols]
     numeric_cols = pivot.select_dtypes(include=["number"]).columns
-    pivot[numeric_cols] = pivot[numeric_cols].round(3)
+    pivot[numeric_cols] = (
+        pivot[numeric_cols].round(0).fillna(0).astype(int)
+    )
+
     if not pivot.empty:
       total_row = {
-          col: round(pivot[col].sum(), 3)
+          col: int(round(pivot[col].sum(), 0))
           if col in numeric_cols
           else ("Grand Total" if col == "ProjectNo" else "")
           for col in pivot.columns
       }
-      pivot = pd.concat([pivot, pd.DataFrame([total_row])], ignore_index=True)
+      total_df = pd.DataFrame([total_row])
+      total_df["ProjectNo"] = total_df["ProjectNo"].astype(str)
+      pivot["ProjectNo"] = pivot["ProjectNo"].astype(str)
+      pivot = pd.concat([pivot, total_df], ignore_index=True)
     return work_df, pivot
 
 
@@ -797,7 +847,20 @@ with tab5:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
     )
-    st.dataframe(overall_pivot, use_container_width=True)
+
+    pivot_configs = {
+        "ProjectNo": st.column_config.TextColumn(label="Project No"),
+        "Project Name": st.column_config.TextColumn(label="Project Name"),
+    }
+    for col in overall_pivot.columns:
+      if col not in ["ProjectNo", "Project Name"]:
+        pivot_configs[col] = st.column_config.NumberColumn(
+            label=f"{col.upper()} (MT)", format="%d"
+        )
+
+    st.dataframe(
+        overall_pivot, column_config=pivot_configs, use_container_width=True
+    )
 
 # --- TAB 6: MILESTONE TRACKER ---
 with tab6:
@@ -911,7 +974,6 @@ with tab6:
     else:
       styled_timeline = timeline_df.style
 
-    # Configure headers with (MT) and whole number formatting (`%d`)
     timeline_configs = {}
     for col in ["total_wt", "disp_wt", "rfd_wt", "wip_wt"]:
       if col in timeline_df.columns:
@@ -965,9 +1027,32 @@ with tab7:
     contractor_summary[["Total_Weight", "Dispatched_Weight", "Active_WIP_Weight"]] = (
         contractor_summary[
             ["Total_Weight", "Dispatched_Weight", "Active_WIP_Weight"]
-        ].round(3)
+        ]
+        .round(0)
+        .astype(int)
     )
-    st.dataframe(contractor_summary, use_container_width=True)
+
+    contractor_configs = {
+        "contractor": st.column_config.TextColumn(label="Contractor Name"),
+        "Total_Items": st.column_config.NumberColumn(
+            label="Total Items", format="%d"
+        ),
+        "Total_Weight": st.column_config.NumberColumn(
+            label="Total Weight (MT)", format="%d"
+        ),
+        "Dispatched_Weight": st.column_config.NumberColumn(
+            label="Dispatched Weight (MT)", format="%d"
+        ),
+        "Active_WIP_Weight": st.column_config.NumberColumn(
+            label="Active WIP Weight (MT)", format="%d"
+        ),
+    }
+
+    st.dataframe(
+        contractor_summary,
+        column_config=contractor_configs,
+        use_container_width=True,
+    )
 
 # --- TAB 8: VISUAL ANALYTICS & CHARTS ---
 with tab8:
@@ -1055,20 +1140,36 @@ with tab9:
       if proj_merged.empty or "project_no" not in proj_merged.columns:
         st.info(f"No project data recorded for {selected_month}.")
       else:
-        proj_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = proj_merged[
-            ["RFD_Weight_MT", "Dispatch_Weight_MT"]
-        ].round(3)
-        total_proj_rfd = round(proj_merged["RFD_Weight_MT"].sum(), 3)
-        total_proj_disp = round(proj_merged["Dispatch_Weight_MT"].sum(), 3)
+        proj_merged["project_no"] = proj_merged["project_no"].astype(str)
+        proj_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = (
+            proj_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]]
+            .round(0)
+            .astype(int)
+        )
+        total_proj_rfd = int(round(proj_merged["RFD_Weight_MT"].sum(), 0))
+        total_proj_disp = int(round(proj_merged["Dispatch_Weight_MT"].sum(), 0))
         proj_total_row = pd.DataFrame([{
             "project_no": "GRAND TOTAL",
             "RFD_Weight_MT": total_proj_rfd,
             "Dispatch_Weight_MT": total_proj_disp,
         }])
+        proj_total_row["project_no"] = proj_total_row["project_no"].astype(str)
         proj_merged = pd.concat(
             [proj_merged, proj_total_row], ignore_index=True
         )
-        st.dataframe(proj_merged, use_container_width=True)
+
+        proj_configs = {
+            "project_no": st.column_config.TextColumn(label="Project No"),
+            "RFD_Weight_MT": st.column_config.NumberColumn(
+                label="RFD Weight (MT)", format="%d"
+            ),
+            "Dispatch_Weight_MT": st.column_config.NumberColumn(
+                label="Dispatch Weight (MT)", format="%d"
+            ),
+        }
+        st.dataframe(
+            proj_merged, column_config=proj_configs, use_container_width=True
+        )
 
       st.markdown("---")
       st.markdown(f"### 👷 Contractor-Wise Summary for {selected_month}")
@@ -1093,17 +1194,33 @@ with tab9:
         if con_merged.empty or con_col not in con_merged.columns:
           st.info(f"No contractor data recorded for {selected_month}.")
         else:
-          con_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = con_merged[
-              ["RFD_Weight_MT", "Dispatch_Weight_MT"]
-          ].round(3)
-          total_con_rfd = round(con_merged["RFD_Weight_MT"].sum(), 3)
-          total_con_disp = round(con_merged["Dispatch_Weight_MT"].sum(), 3)
+          con_merged[con_col] = con_merged[con_col].astype(str)
+          con_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]] = (
+              con_merged[["RFD_Weight_MT", "Dispatch_Weight_MT"]]
+              .round(0)
+              .astype(int)
+          )
+          total_con_rfd = int(round(con_merged["RFD_Weight_MT"].sum(), 0))
+          total_con_disp = int(round(con_merged["Dispatch_Weight_MT"].sum(), 0))
           con_total_row = pd.DataFrame([{
               con_col: "GRAND TOTAL",
               "RFD_Weight_MT": total_con_rfd,
               "Dispatch_Weight_MT": total_con_disp,
           }])
+          con_total_row[con_col] = con_total_row[con_col].astype(str)
           con_merged = pd.concat(
               [con_merged, con_total_row], ignore_index=True
           )
-          st.dataframe(con_merged, use_container_width=True)
+
+          con_configs = {
+              con_col: st.column_config.TextColumn(label="Contractor Name"),
+              "RFD_Weight_MT": st.column_config.NumberColumn(
+                  label="RFD Weight (MT)", format="%d"
+              ),
+              "Dispatch_Weight_MT": st.column_config.NumberColumn(
+                  label="Dispatch Weight (MT)", format="%d"
+              ),
+          }
+          st.dataframe(
+              con_merged, column_config=con_configs, use_container_width=True
+          )
