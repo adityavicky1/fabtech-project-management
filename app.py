@@ -66,6 +66,11 @@ st.markdown(
     <style>
     .stApp { background-color: #f4f6f9; }
     h1, h2, h3 { color: #1f3a60; }
+    div[data-testid="stDataFrame"] th {
+        text-align: center !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -279,8 +284,9 @@ def save_orders_to_db(df):
 df_master, df_orders = load_data_from_db()
 df_master = calculate_automatic_status(df_master)
 
-# --- SIDEBAR: USER INFO & BACKUP RESTORE ---
-st.sidebar.markdown(f"👤 **Logged in as:** `{st.session_state['username']}`")
+# --- SIDEBAR: USER INFO & BACKUP RESTORE (Safe Session Check) ---
+logged_in_user = st.session_state.get("username", "Admin")
+st.sidebar.markdown(f"👤 **Logged in as:** `{logged_in_user}`")
 if st.sidebar.button("🚪 Sign Out"):
   st.session_state["authenticated"] = False
   st.session_state["username"] = ""
@@ -793,20 +799,6 @@ with tab5:
     )
     st.dataframe(overall_pivot, use_container_width=True)
 
-# --- CUSTOM CSS FOR TABLE HEADERS (Wrapped & Centered) ---
-st.markdown(
-    """
-    <style>
-    div[data-testid="stDataFrame"] th {
-        text-align: center !important;
-        white-space: normal !important;
-        word-wrap: break-word !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
 # --- TAB 6: MILESTONE TRACKER ---
 with tab6:
   st.subheader("📅 Milestone & Delivery Timeline Tracker")
@@ -937,6 +929,7 @@ with tab6:
         column_config=timeline_configs,
         use_container_width=True,
     )
+
 # --- TAB 7: CONTRACTOR PERFORMANCE ---
 with tab7:
   st.subheader("👷 Contractor Performance & Shop-Floor Productivity")
